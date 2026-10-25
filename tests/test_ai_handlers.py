@@ -345,7 +345,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_classifier_gets_reply_to_another_participant(self) -> None:
         await self.message(
-            "Тебе нравится ответ Дашули?",  # noqa: RUF001 -- Russian addressing example.
+            "Тебе нравится ответ Дашули?",  # ruff: ignore[ambiguous-unicode-character-string] -- Russian addressing example.
             chat=GROUP,
             reply_to_message={
                 "message_id": 100,
@@ -376,7 +376,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.decision_agent.ask.assert_awaited_once()
 
     async def test_agent_name_requires_word_boundaries(self) -> None:
-        for text in ("dashulya_bot", "megadashulya", "Дашуля123"):  # noqa: RUF001 -- Cyrillic next to digits.
+        for text in ("dashulya_bot", "megadashulya", "Дашуля123"):  # ruff: ignore[ambiguous-unicode-character-string] -- Cyrillic next to digits.
             await self.message(text, chat=GROUP)
         self.decision_agent.ask.assert_not_awaited()
         self.dialogue.reply.assert_not_awaited()

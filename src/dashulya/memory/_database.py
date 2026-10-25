@@ -1,5 +1,5 @@
 import sqlite3
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,8 +16,8 @@ def _connect(path: Path, *, readonly: bool = True) -> sqlite3.Connection:
 
 
 @asynccontextmanager
-async def _read_connection(path: Path) -> AsyncIterator[aiosqlite.Connection]:
-    uri = path.resolve().as_uri()  # noqa: ASYNC240 -- Normalize the configured local filename; SQLite I/O uses aiosqlite.
+async def _read_connection(path: Path) -> AsyncGenerator[aiosqlite.Connection, None]:
+    uri = path.resolve().as_uri()  # ruff: ignore[blocking-path-method-in-async-function] -- Normalize the configured local filename; SQLite I/O uses aiosqlite.
     async with aiosqlite.connect(uri + "?mode=ro", uri=True) as connection:
         connection.row_factory = sqlite3.Row
         async with connection.execute("PRAGMA foreign_keys = ON"):

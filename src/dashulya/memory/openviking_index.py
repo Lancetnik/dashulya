@@ -10,7 +10,7 @@ from dashulya.memory._database import _connect
 from dashulya.memory.openviking import index_digest
 
 
-def export_resources(index: Path, destination: Path, *, root_uri: str) -> Path:  # noqa: PLR0914 -- Keep the export and its exact URI map together.
+def export_resources(index: Path, destination: Path, *, root_uri: str) -> Path:  # ruff: ignore[too-many-locals] -- Keep the export and its exact URI map together.
     """Export all record kinds, bounded discussion directories and a citation map."""
     if not root_uri.startswith("viking://") or root_uri.endswith("/"):
         error_message = (

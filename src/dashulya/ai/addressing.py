@@ -7,7 +7,7 @@ from ag2 import Agent
 from dashulya.domain.messages import GroupMessage
 
 _AGENT_NAME_PATTERN = re.compile(
-    r"(?<!\w)(?:дашул(?:я|и|е|ю|ей|ею)|dashulya)(?!\w)",  # noqa: RUF001 -- Russian case endings.
+    r"(?<!\w)(?:дашул(?:я|и|е|ю|ей|ею)|dashulya)(?!\w)",  # ruff: ignore[ambiguous-unicode-character-string] -- Russian case endings.
     re.IGNORECASE,
 )
 

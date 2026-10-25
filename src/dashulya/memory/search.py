@@ -116,7 +116,7 @@ class MemorySearch:
             rows = await connection.execute_fetchall("SELECT * FROM metadata")
         return cls(path, {row["key"]: json.loads(row["value"]) for row in rows})
 
-    async def search(  # noqa: PLR0914 -- Keep SQL selection and evidence assembly together.
+    async def search(  # ruff: ignore[too-many-locals] -- Keep SQL selection and evidence assembly together.
         self,
         query: str = "",
         *,
@@ -144,14 +144,14 @@ class MemorySearch:
             parameters = [author_id, author_id, after, after, before, before]
             if memory_id:
                 nodes = await connection.execute_fetchall(
-                    f"SELECT n.* FROM memories n WHERE n.key = ? AND {filters}",  # noqa: S608 -- Fixed SQL fragment; values are bound.
+                    f"SELECT n.* FROM memories n WHERE n.key = ? AND {filters}",  # ruff: ignore[hardcoded-sql-expression] -- Fixed SQL fragment; values are bound.
                     [memory_id, *parameters],
                 )
             else:
                 nodes = await connection.execute_fetchall(
                     f"""SELECT n.* FROM memory_fts JOIN memories n ON n.id = memory_fts.rowid
                         WHERE memory_fts MATCH ? AND {filters}
-                        ORDER BY bm25(memory_fts), n.id LIMIT 100""",  # noqa: S608 -- Fixed SQL fragment; values are bound.
+                        ORDER BY bm25(memory_fts), n.id LIMIT 100""",  # ruff: ignore[hardcoded-sql-expression] -- Fixed SQL fragment; values are bound.
                     [expression, *parameters],
                 )
             hits, seen = [], set()
@@ -172,7 +172,7 @@ class MemorySearch:
                         JOIN sources s ON s.memory_id = parent.id
                         WHERE s.message_id IN ({placeholders})
                             AND parent.kind IN ('discussion', 'window') AND parent.id != ?
-                        ORDER BY parent.key LIMIT 4""",  # noqa: S608 -- Only parameter placeholders are interpolated.
+                        ORDER BY parent.key LIMIT 4""",  # ruff: ignore[hardcoded-sql-expression] -- Only parameter placeholders are interpolated.
                     [*(source["id"] for source in sources), node["id"]],
                 )
                 seen.add(node["conversation"])
@@ -197,7 +197,7 @@ class MemorySearch:
                     (">", "ASC", sources[-1]["id"]),
                 ):
                     for neighbor in await connection.execute_fetchall(
-                        f"SELECT * FROM messages WHERE conversation = ? AND id {operator} ? ORDER BY id {ordering} LIMIT 2",  # noqa: S608 -- Operator and ordering come from fixed tuples above.
+                        f"SELECT * FROM messages WHERE conversation = ? AND id {operator} ? ORDER BY id {ordering} LIMIT 2",  # ruff: ignore[hardcoded-sql-expression] -- Operator and ordering come from fixed tuples above.
                         (sources[0]["conversation"], anchor),
                     ):
                         if neighbor["id"] not in source_ids:
@@ -231,7 +231,7 @@ class MemorySearch:
         with closing(_connect(self.path, readonly=False)) as connection, connection:
             placeholders = ",".join("?" for _ in source_ids)
             rows = connection.execute(
-                f"SELECT id, conversation FROM messages WHERE id IN ({placeholders})",  # noqa: S608 -- Only parameter placeholders are interpolated.
+                f"SELECT id, conversation FROM messages WHERE id IN ({placeholders})",  # ruff: ignore[hardcoded-sql-expression] -- Only parameter placeholders are interpolated.
                 source_ids,
             ).fetchall()
             if len(rows) != len(source_ids):

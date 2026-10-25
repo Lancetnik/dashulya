@@ -127,7 +127,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "timezone"):
             await self.reply(
                 (42, None),
-                sent_at=datetime(2026, 10, 25, 12, 0, tzinfo=None),  # noqa: DTZ001 -- Exercise rejection of naive timestamps.
+                sent_at=datetime(2026, 10, 25, 12, 0, tzinfo=None),  # ruff: ignore[call-datetime-without-tzinfo] -- Exercise rejection of naive timestamps.
             )
         self.ask.assert_not_awaited()
 

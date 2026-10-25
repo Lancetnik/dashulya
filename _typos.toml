@@ -11,3 +11,7 @@ extend-exclude = [
     "uv.lock",
     "skills-lock.json",
 ]
+
+[default.extend-words]
+# Ruff copyright rule family.
+CPY = "CPY"

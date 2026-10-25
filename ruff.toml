@@ -69,8 +69,12 @@ ignore = [
     "ANN", "S", "ARG001", "PLR6301", "PLC2701", "PLR0904", "PLR0914",
     "PT009", "PT027", "PT030", "PLC1901", "RUF045",
 ]
+# Dishka closes generator providers when their scope exits.
+"src/dashulya/main/providers/telegram.py" = ["ASYNC119"]
+# These error boundaries cover complete CLI and remote-memory operations.
+"src/dashulya/memory/openviking.py" = ["PLW0717"]
 # JSON is the output of this command.
-"src/dashulya/memory/__main__.py" = ["T201"]
+"src/dashulya/memory/__main__.py" = ["T201", "PLW0717"]
 
 [lint.flake8-unused-arguments]
 ignore-variadic-names = true
