@@ -9,21 +9,36 @@ from ag2.agent import AgentReply
 from ag2.events import ModelRequest, ModelResponse, TextInput
 from ag2.testing import TestConfig, TrackingConfig
 
-from dashulya.ai.dialogue import ConversationKey, Dialogue
+from dashulya.ai.dialogue import Dialogue
+from dashulya.domain.messages import ConversationKey
+from dashulya.main import create_container
+from dashulya.main.config import Settings
+from tests.support import TEST_API_KEY, MemoryOverride, ModelOverrides
 
 SENT_AT = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 
 
 class DialogueTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self) -> None:
+    async def asyncSetUp(self) -> None:
         self.config = TrackingConfig(TestConfig("AI answer"))
-        self.agent = Agent("test", config=self.config)
+        self.settings = Settings(
+            bot_token="123:TEST",
+            openai_api_key=TEST_API_KEY,
+            owner_user_id=42,
+        )
+        self.container = create_container(
+            self.settings,
+            MemoryOverride(),
+            ModelOverrides(reply=self.config, decision=TestConfig("false")),
+        )
+        self.addAsyncCleanup(self.container.close)
+        self.agent = await self.container.get(Agent[str])
         self.real_ask = self.agent.ask
         self.ask = AsyncMock(wraps=self.real_ask)
         ask_patch = patch.object(self.agent, "ask", self.ask)
         ask_patch.start()
         self.addCleanup(ask_patch.stop)
-        self.dialogue = Dialogue(self.agent)
+        self.dialogue = await self.container.get(Dialogue)
 
     async def reply(
         self,
@@ -112,7 +127,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "timezone"):
             await self.reply(
                 (42, None),
-                sent_at=datetime(2026, 10, 25, 12, 0, tzinfo=None),  # noqa: DTZ001 -- Exercise rejection of naive timestamps.
+                sent_at=datetime(2026, 10, 25, 12, 0, tzinfo=None),  # ruff: ignore[call-datetime-without-tzinfo] -- Exercise rejection of naive timestamps.
             )
         self.ask.assert_not_awaited()
 
@@ -184,3 +199,63 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
                 sent_at=SENT_AT,
             ),
         )
+
+    async def test_recent_context_is_isolated_and_does_not_modify_history(self) -> None:
+        await self.reply((-123, 7), "Remember this discussion")
+        stream = self.last_stream()
+        recent = await self.dialogue.recent_context((-123, 7))
+        self.assertIn("Remember this discussion", recent[0]["text"])
+        self.assertEqual(recent[1], {"role": "assistant", "text": "AI answer"})
+        self.assertEqual(len(await self.requests(stream)), 1)
+        self.assertEqual(await self.dialogue.recent_context((-123, 8)), [])
+
+    async def test_recent_context_is_bounded_and_clear_removes_it(self) -> None:
+        for number in range(7):
+            await self.reply((-123, None), f"{number}:" + "x" * 2000)
+        recent = await self.dialogue.recent_context((-123, None))
+        self.assertEqual(len(recent), 10)
+        for entry in recent:
+            self.assertLessEqual(len(entry["text"]), 1000)
+        await self.dialogue.clear((-123, None))
+        self.assertEqual(await self.dialogue.recent_context((-123, None)), [])
+
+    async def test_recent_context_waits_for_reply_while_other_conversations_progress(
+        self,
+    ) -> None:
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def blocked_ask(text: str, **kwargs: Any) -> AgentReply[str, str]:
+            if "Blocked" in text:
+                started.set()
+                await release.wait()
+            return await self.real_ask(text, **kwargs)
+
+        self.ask.side_effect = blocked_ask
+        task = asyncio.create_task(self.reply((-123, 7), "Blocked"))
+        await started.wait()
+        reading = asyncio.create_task(self.dialogue.recent_context((-123, 7)))
+        try:
+            await asyncio.wait_for(self.reply((-123, 8)), timeout=2)
+            self.assertFalse(reading.done())
+        finally:
+            release.set()
+            await task
+            await reading
+
+    async def test_group_reply_preserves_send_time_and_quotes_reply_target(self) -> None:
+        context: dict[str, object] = {
+            "text": "What do you mean?",
+            "reply_to": {"text": "Earlier message", "sender_id": 123},
+        }
+        await self.dialogue.reply(
+            (-123, 7),
+            "What do you mean?",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+            group_context=context,
+        )
+        request = (await self.requests(self.last_stream()))[0]
+        self.assertIn("25 October 2026 (Sunday) 15:00:00", request)
+        self.assertIn("Earlier message", request)
+        self.assertIn("untrusted quoted data", request)

@@ -8,10 +8,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from operator import itemgetter
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from uuid import uuid4
 
-from dashulya.memory._database import _connect
+from dashulya.memory._database import _connect, _read_connection
 
 
 def _date(value: str | None) -> str | None:
@@ -26,6 +26,35 @@ def _date(value: str | None) -> str | None:
         error_message = "Dates must include a timezone, for example 2026-10-25T00:00:00Z."
         raise ValueError(error_message)
     return parsed.isoformat()
+
+
+def validate_search(
+    query: str,
+    memory_id: str | None,
+    after: str | None,
+    before: str | None,
+    limit: int,
+) -> tuple[list[str], str | None, str | None]:
+    """Apply the same query and original-time bounds to both retrieval backends."""
+    if not 1 <= limit <= 5:
+        error_message = "limit must be between 1 and 5."
+        raise ValueError(error_message)
+    if bool(query.strip()) == bool(memory_id):
+        error_message = "Provide either query keywords or a memory_id."
+        raise ValueError(error_message)
+    after, before = _date(after), _date(before)
+    if (
+        after
+        and before
+        and datetime.fromisoformat(after) > datetime.fromisoformat(before)
+    ):
+        error_message = "after must not be later than before."
+        raise ValueError(error_message)
+    tokens = re.findall(r"[^\W_]+", query, re.UNICODE)
+    if not memory_id and (not tokens or len(tokens) > 20 or len(query) > 500):
+        error_message = "Use 1 to 20 keywords, at most 500 characters."
+        raise ValueError(error_message)
+    return tokens, after, before
 
 
 @dataclass(frozen=True)
@@ -74,18 +103,20 @@ def _evidence(row: sqlite3.Row, tokens: list[str]) -> Evidence:
 class MemorySearch:
     """One search interface for the owner-only, single-chat experimental corpus."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, coverage: dict[str, Any]) -> None:
         self.path = path
-        with closing(_connect(path)) as connection:
-            self.coverage = {
-                row["key"]: json.loads(row["value"])
-                for row in connection.execute("SELECT * FROM metadata")
-            }
+        self.coverage = coverage
         if self.coverage.get("version") != 1:
             error_message = "Unsupported memory index version."
             raise ValueError(error_message)
 
-    def search(  # noqa: PLR0914 -- Keep SQL selection and evidence assembly together.
+    @classmethod
+    async def open(cls, path: Path) -> Self:
+        async with _read_connection(path) as connection:
+            rows = await connection.execute_fetchall("SELECT * FROM metadata")
+        return cls(path, {row["key"]: json.loads(row["value"]) for row in rows})
+
+    async def search(  # ruff: ignore[too-many-locals] -- Keep SQL selection and evidence assembly together.
         self,
         query: str = "",
         *,
@@ -96,26 +127,9 @@ class MemorySearch:
         limit: int = 3,
     ) -> dict[str, Any]:
         """Search all levels, or expand a returned memory ID, with original evidence."""
-        if not 1 <= limit <= 5:
-            error_message = "limit must be between 1 and 5."
-            raise ValueError(error_message)
-        if bool(query.strip()) == bool(memory_id):
-            error_message = "Provide either query keywords or a memory_id."
-            raise ValueError(error_message)
-        after, before = _date(after), _date(before)
-        if (
-            after
-            and before
-            and datetime.fromisoformat(after) > datetime.fromisoformat(before)
-        ):
-            error_message = "after must not be later than before."
-            raise ValueError(error_message)
-        tokens = re.findall(r"[^\W_]+", query, re.UNICODE)
-        if not memory_id and (not tokens or len(tokens) > 20 or len(query) > 500):
-            error_message = "Use 1 to 20 keywords, at most 500 characters."
-            raise ValueError(error_message)
+        tokens, after, before = validate_search(query, memory_id, after, before, limit)
         expression = " AND ".join(f'"{token}"*' for token in tokens)
-        with closing(_connect(self.path)) as connection:
+        async with _read_connection(self.path) as connection:
             # A derived memory is eligible only when every source satisfies the requested filters.
             filters = """
                 NOT EXISTS (
@@ -129,36 +143,38 @@ class MemorySearch:
             """
             parameters = [author_id, author_id, after, after, before, before]
             if memory_id:
-                nodes = connection.execute(
-                    f"SELECT n.* FROM memories n WHERE n.key = ? AND {filters}",  # noqa: S608 -- Fixed SQL fragment; values are bound.
+                nodes = await connection.execute_fetchall(
+                    f"SELECT n.* FROM memories n WHERE n.key = ? AND {filters}",  # ruff: ignore[hardcoded-sql-expression] -- Fixed SQL fragment; values are bound.
                     [memory_id, *parameters],
-                ).fetchall()
+                )
             else:
-                nodes = connection.execute(
+                nodes = await connection.execute_fetchall(
                     f"""SELECT n.* FROM memory_fts JOIN memories n ON n.id = memory_fts.rowid
                         WHERE memory_fts MATCH ? AND {filters}
-                        ORDER BY bm25(memory_fts), n.id LIMIT 100""",  # noqa: S608 -- Fixed SQL fragment; values are bound.
+                        ORDER BY bm25(memory_fts), n.id LIMIT 100""",  # ruff: ignore[hardcoded-sql-expression] -- Fixed SQL fragment; values are bound.
                     [expression, *parameters],
-                ).fetchall()
+                )
             hits, seen = [], set()
             for node in nodes:
                 if node["conversation"] in seen:
                     continue
-                sources = connection.execute(
-                    "SELECT m.* FROM sources s JOIN messages m ON m.id = s.message_id WHERE s.memory_id = ? ORDER BY m.id",
-                    (node["id"],),
-                ).fetchall()
+                sources = list(
+                    await connection.execute_fetchall(
+                        "SELECT m.* FROM sources s JOIN messages m ON m.id = s.message_id WHERE s.memory_id = ? ORDER BY m.id",
+                        (node["id"],),
+                    )
+                )
                 if not sources:
                     continue
                 placeholders = ",".join("?" for _ in sources)
-                related = connection.execute(
+                related = await connection.execute_fetchall(
                     f"""SELECT DISTINCT parent.key FROM memories parent
                         JOIN sources s ON s.memory_id = parent.id
                         WHERE s.message_id IN ({placeholders})
                             AND parent.kind IN ('discussion', 'window') AND parent.id != ?
-                        ORDER BY parent.key LIMIT 4""",  # noqa: S608 -- Only parameter placeholders are interpolated.
+                        ORDER BY parent.key LIMIT 4""",  # ruff: ignore[hardcoded-sql-expression] -- Only parameter placeholders are interpolated.
                     [*(source["id"] for source in sources), node["id"]],
-                ).fetchall()
+                )
                 seen.add(node["conversation"])
                 context: dict[int, sqlite3.Row] = {}
                 source_ids = {source["id"] for source in sources}
@@ -167,9 +183,10 @@ class MemorySearch:
                     for _ in range(2):
                         if parent_id is None:
                             break
-                        parent = connection.execute(
+                        async with connection.execute(
                             "SELECT * FROM messages WHERE id = ?", (parent_id,)
-                        ).fetchone()
+                        ) as cursor:
+                            parent = await cursor.fetchone()
                         if parent is None:
                             break
                         if parent["id"] not in source_ids:
@@ -179,8 +196,8 @@ class MemorySearch:
                     ("<", "DESC", sources[0]["id"]),
                     (">", "ASC", sources[-1]["id"]),
                 ):
-                    for neighbor in connection.execute(
-                        f"SELECT * FROM messages WHERE conversation = ? AND id {operator} ? ORDER BY id {ordering} LIMIT 2",  # noqa: S608 -- Operator and ordering come from fixed tuples above.
+                    for neighbor in await connection.execute_fetchall(
+                        f"SELECT * FROM messages WHERE conversation = ? AND id {operator} ? ORDER BY id {ordering} LIMIT 2",  # ruff: ignore[hardcoded-sql-expression] -- Operator and ordering come from fixed tuples above.
                         (sources[0]["conversation"], anchor),
                     ):
                         if neighbor["id"] not in source_ids:
@@ -214,7 +231,7 @@ class MemorySearch:
         with closing(_connect(self.path, readonly=False)) as connection, connection:
             placeholders = ",".join("?" for _ in source_ids)
             rows = connection.execute(
-                f"SELECT id, conversation FROM messages WHERE id IN ({placeholders})",  # noqa: S608 -- Only parameter placeholders are interpolated.
+                f"SELECT id, conversation FROM messages WHERE id IN ({placeholders})",  # ruff: ignore[hardcoded-sql-expression] -- Only parameter placeholders are interpolated.
                 source_ids,
             ).fetchall()
             if len(rows) != len(source_ids):

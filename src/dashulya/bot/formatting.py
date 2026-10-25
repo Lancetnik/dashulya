@@ -1,6 +1,7 @@
+import re
 from collections.abc import Iterator
 
-from aiogram.types import MessageEntity
+from aiogram.types import InputRichMessage, MessageEntity
 from aiogram.utils.formatting import (
     BlockQuote,
     Bold,
@@ -16,7 +17,77 @@ from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
 
 _MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("strikethrough")
+_RICH_MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable([
+    "table",
+    "strikethrough",
+])
 _STYLES: dict[str, type[Text]] = {"strong": Bold, "em": Italic, "s": Strikethrough}
+_RICH_FORMATS = {
+    "strong",
+    "em",
+    "s",
+    "code_inline",
+    "fence",
+    "code_block",
+    "link",
+    "heading",
+    "bullet_list",
+    "ordered_list",
+    "blockquote",
+    "table",
+    "hr",
+}
+_RICH_BLOCKS = {
+    "paragraph",
+    "heading",
+    "fence",
+    "code_block",
+    "bullet_list",
+    "ordered_list",
+    "list_item",
+    "blockquote",
+    "table",
+    "tr",
+    "hr",
+}
+
+
+def rich_message(markdown: str) -> InputRichMessage | None:
+    # Native Rich Markdown supports 32768 characters, 500 blocks, and 16 levels.
+    if not markdown.strip() or len(markdown) > 32768:
+        return None
+    nodes = list(SyntaxTreeNode(_RICH_MARKDOWN.parse(markdown)).walk())
+    stack: list[str] = []
+    html_blocks = 0
+    formatted = any(node.type in _RICH_FORMATS for node in nodes)
+    for node in nodes:
+        if node.type == "image" or sum(1 for _ in _ancestors(node)) > 16:
+            return None
+        if node.type == "tr" and len(node.children) > 20:
+            return None
+        if node.type != "text":
+            continue
+        for tag in re.findall(r"<[^>\n]*>", node.content):
+            match = re.fullmatch(r"<(\/)?(details|summary|u|ins|sub|sup)( open)?>", tag)
+            if match is None:
+                return None
+            closing, name, attribute = match.groups()
+            if attribute and (closing or name != "details"):
+                return None
+            formatted = True
+            if closing:
+                if not stack or stack.pop() != name:
+                    return None
+            else:
+                stack.append(name)
+                html_blocks += name in {"details", "summary"}
+                if len(stack) > 16:
+                    return None
+    if stack or not formatted:
+        return None
+    if sum(node.type in _RICH_BLOCKS for node in nodes) + html_blocks > 500:
+        return None
+    return InputRichMessage(markdown=markdown)
 
 
 def text_chunks(text: str) -> Iterator[str]:

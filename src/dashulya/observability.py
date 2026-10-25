@@ -20,7 +20,7 @@ _CONTEXT_FIELDS = (
     "error_param",
     "request_id",
     "model",
-    "memory_enabled",
+    "should_reply",
     "exceptions",
 )
 

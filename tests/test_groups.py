@@ -8,9 +8,11 @@ from unittest.mock import AsyncMock, patch
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update, User
 
-from dashulya.bot.handlers.groups import group_list_messages
-from dashulya.bot.router import create_router
-from dashulya.storage.groups import Group, GroupStore
+from dashulya.domain.groups import Group, GroupRegistry
+from dashulya.main import create_container
+from dashulya.main.config import Settings
+from dashulya.storage.groups import GroupStore
+from tests.support import TEST_API_KEY, BotOverride, DecisionOverride, DialogueOverride
 
 BOT_TOKEN = "123456789:TEST_ONLY_NOT_A_REAL_BOT_TOKEN"
 BOT_USER: dict[str, Any] = {"id": 123456789, "is_bot": True, "first_name": "Dashulya"}
@@ -23,8 +25,6 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.groups = GroupStore(Path(self.directory.name) / "groups.sqlite3")
-        self.addCleanup(self.groups.close)
         self.bot = Bot(BOT_TOKEN)
         self.addAsyncCleanup(self.bot.session.close)
         self.requests = AsyncMock(return_value=True)
@@ -38,8 +38,22 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
         )
         me_patch.start()
         self.addCleanup(me_patch.stop)
-        self.dispatcher = Dispatcher(groups=self.groups)
-        self.dispatcher.include_router(create_router(owner_user_id=USER["id"]))
+        decision = AsyncMock()
+        decision.ask.return_value.content = AsyncMock(return_value=False)
+        self.container = create_container(
+            Settings(
+                bot_token=BOT_TOKEN,
+                openai_api_key=TEST_API_KEY,
+                owner_user_id=USER["id"],
+                database_path=Path(self.directory.name) / "groups.sqlite3",
+            ),
+            BotOverride(self.bot),
+            DialogueOverride(AsyncMock()),
+            DecisionOverride(decision),
+        )
+        self.addAsyncCleanup(self.container.close)
+        self.groups = await self.container.get(GroupStore)
+        self.dispatcher = await self.container.get(Dispatcher)
         self.update_id = 0
 
     async def feed(self, **payload: Any) -> Any:
@@ -222,7 +236,13 @@ class GroupPersistenceTests(unittest.TestCase):
 
     def test_large_group_list_is_split_without_losing_entries(self) -> None:
         groups = [Group(-index, f"{index}: " + "💋" * 120) for index in range(1, 101)]
-        messages = list(group_list_messages(groups))
+        with (
+            TemporaryDirectory() as directory,
+            closing(GroupStore(Path(directory) / "groups.db")) as store,
+        ):
+            for group in groups:
+                store.remember(group)
+            messages = list(GroupRegistry(store).messages())
         self.assertGreater(len(messages), 1)
         for message in messages:
             self.assertLessEqual(len(message.encode("utf-16-le")) // 2, 4096)

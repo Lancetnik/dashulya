@@ -5,10 +5,12 @@ from dashulya.bot.middlewares.access import OwnerOnlyMiddleware
 from dashulya.bot.middlewares.group_tracking import TrackGroupsMiddleware
 
 
-def create_router(*, owner_user_id: int) -> Router:
+def create_router(
+    *, tracking: TrackGroupsMiddleware, access: OwnerOnlyMiddleware
+) -> Router:
     router = Router(name=__name__)
-    router.message.outer_middleware(TrackGroupsMiddleware())
-    router.message.outer_middleware(OwnerOnlyMiddleware(owner_user_id))
+    router.message.outer_middleware(tracking)
+    router.message.outer_middleware(access)
     router.include_routers(
         commands.create_router(),
         groups.create_router(),

@@ -1,51 +1,33 @@
-from collections.abc import Iterator
-
 from aiogram import F, Router
 from aiogram.enums import ChatMemberStatus
 from aiogram.filters import Command
 from aiogram.types import ChatMemberUpdated, Message
+from dishka.integrations.aiogram import FromDishka, inject
 
 from dashulya.bot.middlewares.group_tracking import GROUP_TYPES
-from dashulya.storage.groups import Group, GroupStore
+from dashulya.domain.groups import Group, GroupRegistry
 
 
-def group_list_messages(groups: list[Group]) -> Iterator[str]:
-    if not groups:
-        yield "I don't know of any groups yet. Add me to a group or send /groups in an existing group."
-        return
-
-    text = "Groups I know I'm in:"
-    for group in groups:
-        username = f" @{group.username}" if group.username else ""
-        line = f"\n• {group.title}{username} (ID: {group.chat_id})"
-        # Leave room below Telegram's 4096-character limit, including emoji.
-        if len((text + line).encode("utf-16-le")) > 8000:
-            yield text
-            text = "Groups (continued):"
-        text += line
-    yield text
-
-
-async def list_groups(message: Message, groups: GroupStore) -> None:
-    for text in group_list_messages(groups.list_groups()):
+@inject
+async def list_groups(message: Message, groups: FromDishka[GroupRegistry]) -> None:
+    for text in groups.messages():
         await message.answer(text)
 
 
-async def track_membership(event: ChatMemberUpdated, groups: GroupStore) -> None:
+@inject
+async def track_membership(
+    event: ChatMemberUpdated, groups: FromDishka[GroupRegistry]
+) -> None:
     member = event.new_chat_member
     is_member = member.status in {
         ChatMemberStatus.CREATOR,
         ChatMemberStatus.ADMINISTRATOR,
         ChatMemberStatus.MEMBER,
     } or (member.status == ChatMemberStatus.RESTRICTED and member.is_member)
-    if is_member:
-        groups.remember(
-            Group(
-                event.chat.id, event.chat.title or "Untitled group", event.chat.username
-            )
-        )
-    else:
-        groups.forget(event.chat.id)
+    groups.membership(
+        Group(event.chat.id, event.chat.title or "Untitled group", event.chat.username),
+        present=is_member,
+    )
 
 
 def create_router() -> Router:

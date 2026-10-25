@@ -1,145 +1,133 @@
-# Unified chat memory: first implementation
+# Chat memory
 
-The assistant has one read tool, `search_memory`. Messages, discussion extracts,
-summaries, and facts are records in the same search space. Every derived record
-links to original messages, which remain directly searchable.
+The agent requires OpenViking. It exposes one read tool, `search_memory`, across
+original messages, discussion extracts, summaries and facts. Every derived
+record links to original messages, which remain directly retrievable. SQLite
+preserves canonical evidence; it is not an alternate agent retrieval backend.
 
 ```mermaid
 flowchart LR
-    Query[Query and filters] --> Index[One FTS5 index]
-    Index --> Messages[Original messages]
-    Index --> Discussions[Discussion extracts]
-    Index --> Summaries[Summaries and facts]
-    Discussions --> Messages
-    Summaries --> Messages
-    Messages --> Evidence[Source excerpts, reply context, and Telegram links]
+    Query[Query and original-message filters] --> Index[OpenViking semantic recall]
+    Index --> Layers[L0 abstracts / L1 overviews / L2 originals]
+    Layers --> Map[Verified URI to memory ID map]
+    Map --> SQLite[Canonical messages and source links]
+    SQLite --> Evidence[Source excerpts / reply context / Telegram links]
 ```
 
-## Local index
+## Local data and coverage
 
-`data/memory.sqlite3` is derived from the preserved snapshot in
-`data/fastnewsdev/snapshot.sqlite3`. Both remain excluded from Git. The builder
-reads the snapshot without changing it, records its SHA-256 and coverage dates,
-and publishes a completed database without overwriting an existing index.
+The immutable source snapshot is `data/fastnewsdev/snapshot.sqlite3`. The full
+maintained evidence index, `data/memory.sqlite3`, contains 17,000 messages and
+one manually reviewed example summary citing message 15100. Creating an index
+does not automatically recreate maintained summaries.
 
-The local index currently contains all 17,000 imported message records. It also
-contains one manually written example summary, citing message 15100, about
-considering Osinara for a bot with custom writing-style skills. This demonstrates
-searching a paraphrase and returning its original evidence. Building an index
-does not automatically recreate this example summary.
+The current OpenViking import is a separate pilot: 379 original messages, 81
+discussion/window extracts and one maintained summary. Its matching SQLite
+index is `data/experiments/openviking/pilot.sqlite3`; its completed manifest is
+`data/experiments/openviking/export/manifest.json`. The full corpus has not been
+imported into OpenViking. A working clone needs its own local dataset and import;
+these files are excluded from Git.
 
 | Table | Role |
 | --- | --- |
-| `messages` | Original text, sender, timestamp, reply target, conversation key, and public Telegram URL |
-| `memories` | Searchable records of kind `message`, `discussion`, `window`, `summary`, or `fact` |
-| `sources` | Links from each searchable record to original message IDs |
-| `memory_fts` | One FTS5 index over all record kinds |
+| `messages` | Original text, sender, timestamp, reply target, conversation key and Telegram URL |
+| `memories` | Records of kind `message`, `discussion`, `window`, `summary` or `fact` |
+| `sources` | Links from records to original message IDs |
 | `metadata` | Source provenance and historical coverage |
+| `memory_fts` | Lexical index used by offline inspection and comparison commands |
 
-Discussion extracts are deterministic concatenations of up to eight messages.
-Messages are grouped by their channel-post thread or reply chain; otherwise
-they are grouped into 15-minute windows. These are navigation aids, not generated
-summaries or guaranteed topic boundaries. Original messages retain their full
-text in the derived database.
+Discussion extracts concatenate up to eight messages. Grouping uses a channel
+post thread or reply chain, with 15-minute windows for unrelated messages. These
+are navigation aids, not guaranteed topic boundaries. OpenViking additionally
+generates summaries during import. Read the [import and retrieval guide](../../experiments/openviking/README.md)
+before changing resource export, path reconciliation or semantic recall.
 
 ## Search contract
 
+The domain exposes an async `MemoryBackend.search` interface. The agent's only
+implementation is OpenViking:
+
 ```python
-memory.search(
-    query="rtk pytest",
+await memory.search(
+    query="Who considered reusing Osinara for a bot with custom skills?",
     author_id=None,
     after=None,
     before=None,
     limit=3,
 )
-memory.search(memory_id="message:15100")
+await memory.search(memory_id="message:15100")
 ```
 
-Provide either query keywords or a previously returned memory ID. Keyword
-search uses case-insensitive token prefixes combined with AND; tokens can match
-across messages in a discussion extract. Input is parameterized and quoted as
-literal tokens rather than accepted as arbitrary FTS syntax. The current
-implementation uses FTS5 BM25 ranking. It has no embeddings, synonym expansion,
-Russian stemming, or neural reranker. For Russian, a deliberately chosen word
-stem can work as a prefix.
+Provide a semantic query or a returned memory ID. Query recall uses OpenViking's
+`AsyncHTTPClient.find`, without a reranker or session query planning. All mapped
+L0/L1/L2 records can enter recall, including original messages absent from
+summaries. Direct memory-ID expansion reads canonical local evidence.
 
-The implementation considers at most 100 ranked candidates and returns up to
-five hits, collapsing candidates from the same conversation. This is bounded
-retrieval, not an exhaustive report or an exact message count.
+Author IDs and inclusive timezone-aware ISO bounds constrain original sources
+before recall. A multi-source record qualifies only if every source satisfies
+the filters. OpenViking's import timestamps do not replace Telegram send times.
+The adapter checks returned URIs against the verified manifest before expanding
+the corresponding SQLite record.
 
-Author IDs and inclusive timezone-aware ISO date bounds constrain a record's
-sources. A summary spanning multiple authors or dates is eligible only if
-every source satisfies the filters; the search can still find individual
-eligible messages directly. Related context is labeled separately and may
-include other authors or dates.
+Each hit contains its kind, ID, excerpt, supporting messages, up to four related
+context messages and discussion IDs that the same tool can expand. Context
+includes reply parents up to two edges away and neighboring messages. It may
+contain other authors and dates and is labeled separately. Original message
+excerpts are capped at 1,200 characters with `truncated` and `excerpt_start`.
+Telegram URLs always come from canonical messages.
 
-Each hit contains its kind and ID, an excerpt, all its source messages, up to
-four context messages, and related discussion IDs that the same tool can
-expand. Context includes reply parents up to two edges away and neighboring
-messages from the same conversation. Source text excerpts are capped at 1,200
-characters and carry `truncated` and `excerpt_start`; they are not represented
-as complete messages when truncated. Telegram links point to originals.
+Both the agent and offline baseline consider at most 100 ranked candidates and
+return up to five hits, keeping one per conversation. This provides diversity,
+not text deduplication; distinct useful messages within a conversation can be
+suppressed. Top-k recall does not establish completeness or prove absence.
+Questions about all activity over a period need a chronological scan or an
+aggregation rather than this bounded retrieval.
 
-Summary/fact writes are a local maintenance operation. `remember` requires one
-to eight existing source message IDs. This enforces provenance integrity, not
-the semantic truth of a summary; a reviewer or a separately evaluated extraction
-process must establish that the sources support its wording.
+## Startup and storage
 
-## Commands
+`MEMORY_PATH` and `OPENVIKING_MANIFEST` select a matching local evidence index and
+completed import. The manifest records the index SHA-256 and actual parser paths,
+including wrapped Markdown files and split chunks. Every exported record must
+have an original leaf. Startup rejects missing/mismatched files, an incomplete
+import, an unavailable server or a missing remote corpus. There is no lexical
+fallback or startup mode without memory.
 
-The default index is already built locally. To build a new index in a fresh
-location, without any Telegram or model API calls:
+`docker compose up -d --build --wait` starts both services. The agent waits for
+OpenViking readiness, validates memory and its Telegram identity, and then polls.
+The agent uses `http://openviking:1933`; host import tools use the published
+loopback port. Evidence and the manifest are mounted read-only. The OpenViking
+workspace, group registry and logs persist separately on the host.
+
+Restart the agent after changing evidence or the manifest. Import into a fresh
+namespace after index updates. Snapshot refreshes, live message synchronization
+and deletion propagation are not automatic. Historical content is untrusted
+source data; memory access does not imply live Telegram access. The current
+single-owner, single-group corpus is distinct from the agent's in-memory
+conversation history and observed-group registry.
+
+## Offline maintenance and comparison
+
+SQLite indexing and lexical inspection remain available without model calls:
 
 ```sh
 uv run python -m dashulya.memory --index data/memory-next.sqlite3 build \
   data/fastnewsdev/snapshot.sqlite3 --chat fastnewsdev_chat
-```
-
-Search the current default index and expand a result:
-
-```sh
 uv run python -m dashulya.memory search "rtk pytest"
 uv run python -m dashulya.memory expand "message:15100"
 ```
 
-Add a reviewed, source-backed summary:
+Builders refuse existing destinations. Preserve maintained records when
+creating another index. Summary/fact writes require one to eight existing source
+IDs; this enforces provenance integrity, not the semantic truth of the text:
 
 ```sh
 uv run python -m dashulya.memory remember \
   "A participant considered reusing Osinara for a bot with custom writing-style skills instead of building a bot from scratch." \
   --sources 15100
-uv run python -m dashulya.memory search "writing style"
 ```
 
-`--index` is a global option and goes before the subcommand. Existing indices
-are never replaced by `build`, since doing so would discard maintained facts
-and summaries. A new index needs those records replayed explicitly. Neither
-new source messages nor snapshot refreshes are ingested automatically yet.
-
-## Bot integration
-
-On startup, `main.py` loads the file configured by `MEMORY_PATH`, defaulting to
-`data/memory.sqlite3`, when it exists. The AG2 agent receives one read-only
-`search_memory` tool. SQLite search runs in a worker thread. The existing owner
-check and private-chat routing control access to the tool; the model cannot
-select another database or group. The current index is an owner-only experiment
-for one imported public group, not a shared multi-chat memory service.
-
-The prompt requires source links and respects the snapshot's coverage dates.
-Retrieved messages are untrusted evidence, not instructions. The write operation
-is not exposed to the agent. Without an index, ordinary AI conversation remains
-available with the original no-history-access prompt. Restart the bot after
-creating an index or changing `MEMORY_PATH`.
-
-## Next experiments
-
-The hierarchy and evidence links now work independently of the retrieval model.
-Next, label real questions with relevant source messages and discussions. Compare
-this lexical baseline with contextual embeddings over the same record IDs,
-fusing candidates internally while keeping `search_memory` unchanged. Assess
-whether a reranker improves source recall and answer grounding enough to justify
-its latency. Evaluate automated summaries separately: missing or incorrect
-summaries must not remove the original messages from the search space.
-
-Questions asking for all activity over a time range need a complete chronological
-scan or aggregation, rather than a claim of completeness from this top-k search.
+The agent has no write tool. Re-export and import after maintenance before using
+that changed index with OpenViking. Follow the [experiment guide](../../experiments/openviking/README.md)
+for import and offline comparisons. The [pilot report](../research/openviking-comparison.md)
+records measured retrieval quality, context budget, latency and indexing cost;
+the [source review](../research/openviking.md) records upstream behavior and limits.

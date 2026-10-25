@@ -51,8 +51,8 @@ repos:
         entry: uv run --locked --no-dev --group lint check-added-large-files
         args: [--maxkb=1024, --enforce-all]
         language: system
-        # These two selected avatar assets intentionally exceed the 1 MiB limit.
-        exclude: ^assets/avatar(-original)?\.png$
+        # Selected avatar assets intentionally exceed the 1 MiB limit.
+        exclude: ^assets/avatar(-original|-circle)?\.png$
       - id: detect-secrets
         name: Detect secrets
         entry: uv run --locked --no-dev --group lint detect-secrets-hook
@@ -88,5 +88,5 @@ repos:
         name: Import Linter
         entry: just import-linter
         language: system
-        files: ^(src/|pyproject\.toml$|justfile$)
+        files: ^(src/|\.importlinter$|pyproject\.toml$|justfile$)
         pass_filenames: false
