@@ -3,10 +3,45 @@ import unittest
 from aiogram.types import MessageEntity
 from aiogram.utils.formatting import sizeof
 
-from dashulya.bot.formatting import render_markdown
+from dashulya.bot.formatting import render_markdown, rich_message
 
 
 class MarkdownFormattingTests(unittest.TestCase):
+    def test_native_rich_formatting_preserves_markdown(self) -> None:
+        for markdown in (
+            "**bold**",
+            "# Heading",
+            "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            "<details><summary>Title</summary>\n\nBody\n\n</details>",
+            "`<html>`",
+        ):
+            with self.subTest(markdown=markdown):
+                rich = rich_message(markdown)
+                assert rich is not None
+                self.assertEqual(rich.markdown, markdown)
+
+    def test_plain_text_unsupported_html_and_media_use_text_transport(self) -> None:
+        for markdown in (
+            "",
+            "Hello",
+            "**bold** <script>text</script>",
+            "![alt](https://example.com/image.png)",
+            "<details><summary>Unclosed",
+        ):
+            with self.subTest(markdown=markdown):
+                self.assertIsNone(rich_message(markdown))
+
+    def test_rich_limits_fall_back_before_sending(self) -> None:
+        wide_table = "|" + "A|" * 21 + "\n|" + "---|" * 21
+        for markdown in (
+            "**" + "a" * 32768 + "**",
+            "**paragraph**\n\n" * 501,
+            "<details>" * 17 + "text" + "</details>" * 17,
+            wide_table,
+        ):
+            with self.subTest(length=len(markdown)):
+                self.assertIsNone(rich_message(markdown))
+
     def render(self, markdown: str) -> tuple[str, list[MessageEntity]]:
         chunks = list(render_markdown(markdown))
         self.assertEqual(len(chunks), 1)

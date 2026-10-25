@@ -6,7 +6,8 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from aiogram import Bot, Dispatcher
-from aiogram.methods import SendMessage
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.methods import SendMessage, SendRichMessage, TelegramMethod
 from aiogram.types import Update, User
 
 from dashulya.bot.formatting import text_chunks
@@ -78,6 +79,13 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
             if isinstance(call.args[1], SendMessage)
         ]
 
+    def rich_replies(self) -> list[SendRichMessage]:
+        return [
+            call.args[1]
+            for call in self.requests.call_args_list
+            if isinstance(call.args[1], SendRichMessage)
+        ]
+
     async def test_private_text_invokes_dialogue_and_replies_as_plain_text(self) -> None:
         await self.message("Hi")
         self.dialogue.reply.assert_awaited_once_with(
@@ -93,7 +101,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         assert reply.reply_parameters is not None
         self.assertEqual(reply.reply_parameters.message_id, 1)
 
-    async def test_markdown_bold_and_source_links_are_sent_as_telegram_entities(
+    async def test_markdown_bold_and_source_links_use_native_rich_messages(
         self,
     ) -> None:
         link_label = "Обсуждение"
@@ -102,17 +110,58 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
             f"[{link_label}](https://t.me/fastnewsdev_chat/19008)"
         )
         await self.message("Что обсуждали?")
+        reply = self.rich_replies()[-1]
+        self.assertEqual(reply.rich_message.markdown, self.dialogue.reply.return_value)
+        self.assertEqual(reply.chat_id, PRIVATE["id"])
+        assert reply.reply_parameters is not None
+        self.assertEqual(reply.reply_parameters.message_id, 1)
+        self.assertEqual(self.replies(), [])
+
+    async def test_native_tables_and_collapsible_details_are_preserved(self) -> None:
+        text = "## Models\n\n| Model | Cost |\n| --- | --- |\n| Luna | Low |\n\n<details><summary>Details</summary>\n\n**More information**\n\n</details>"
+        self.dialogue.reply.return_value = text
+        await self.message("Compare models")
+        self.assertEqual(len(self.rich_replies()), 1)
+        self.assertEqual(self.rich_replies()[0].rich_message.markdown, text)
+
+    async def test_rejected_rich_message_falls_back_to_formatted_text(self) -> None:
+        async def request(bot: Bot, method: TelegramMethod[Any], **kwargs: Any) -> bool:
+            if isinstance(method, SendRichMessage):
+                raise TelegramBadRequest(method, "Bad Request: can't parse rich message")
+            return True
+
+        self.requests.side_effect = request
+        self.dialogue.reply.return_value = "**Codex** [source](https://example.com)"
+        with self.assertLogs("dashulya.bot.handlers.dialogue", level="WARNING"):
+            await self.message("Hi")
+        self.assertEqual(len(self.rich_replies()), 1)
         reply = self.replies()[-1]
+        self.assertEqual(reply.text, "Codex source")
         self.assertEqual(
-            reply.text,
-            f"Вчера обсуждали Codex и Claude 😄\n{link_label}",
+            [entity.type for entity in reply.entities or []], ["bold", "text_link"]
         )
-        self.assertIsNone(reply.parse_mode)
-        entities = reply.entities or []
-        self.assertEqual([entity.type for entity in entities], ["bold", "text_link"])
-        self.assertEqual(entities[0].extract_from(reply.text), "Codex и Claude")
-        self.assertEqual(entities[1].extract_from(reply.text), link_label)
-        self.assertEqual(entities[1].url, "https://t.me/fastnewsdev_chat/19008")
+
+    async def test_rich_network_failure_is_not_retried_as_another_message(self) -> None:
+        async def request(bot: Bot, method: TelegramMethod[Any], **kwargs: Any) -> bool:
+            if isinstance(method, SendRichMessage):
+                raise TelegramNetworkError(method, "Connection lost after sending")
+            return True
+
+        self.requests.side_effect = request
+        self.dialogue.reply.return_value = "**Codex**"
+        with self.assertRaises(TelegramNetworkError):
+            await self.message("Hi")
+        self.assertEqual(len(self.rich_replies()), 1)
+        self.assertEqual(self.replies(), [])
+
+    async def test_oversized_rich_answer_keeps_formatting_in_text_chunks(self) -> None:
+        text = "a" * 33000
+        self.dialogue.reply.return_value = f"**{text}**"
+        await self.message("Long answer")
+        self.assertEqual(self.rich_replies(), [])
+        self.assertEqual("".join(reply.text for reply in self.replies()), text)
+        for reply in self.replies():
+            self.assertEqual([entity.type for entity in reply.entities or []], ["bold"])
 
     async def test_other_users_cannot_use_ai_or_commands_in_any_chat(self) -> None:
         outsider = {**USER, "id": 43}

@@ -1,20 +1,19 @@
-<div align="center">
-  <a href="https://t.me/dashulya_ai">
-    <img src="assets/avatar.png" width="190" height="190" alt="Dashulya: a platinum-haired cyber assistant in a pink coat, framed by a pink ring" />
-  </a>
-  <h1>Dashulya</h1>
-  <p>
-    <a href="https://t.me/dashulya_ai"><strong>@dashulya_ai</strong></a><br />
-    <sub>also <a href="https://t.me/dashulyai_bot">@dashulyai_bot</a></sub>
-  </p>
-  <p>
-    <strong>Спрашивай, котик💋</strong><br />
-    <em>Ask away, kitten.</em>
-  </p>
-  <p>A Telegram assistant with memory and a sense of humor.</p>
-  <p><a href="https://t.me/dashulya_ai"><strong>Open in Telegram ↗</strong></a></p>
-  <p><sub>Early prototype · Owner-only access</sub></p>
-</div>
+<table>
+  <tr>
+    <td width="96" valign="top">
+      <a href="https://t.me/dashulya_ai">
+        <img src="assets/avatar-circle.png" width="80" height="80" alt="Dashulya's circular avatar" />
+      </a>
+    </td>
+    <td valign="top">
+      <strong>Dashulya</strong> &nbsp; <a href="https://t.me/dashulya_ai">@dashulya_ai</a><br />
+      Спрашивай, котик💋<br />
+      <sub>Ask away, kitten.</sub>
+    </td>
+  </tr>
+</table>
+
+<sub>Also <a href="https://t.me/dashulyai_bot">@dashulyai_bot</a> · A Telegram assistant with memory and a sense of humor · Owner-only prototype</sub>
 
 ---
 
@@ -28,6 +27,7 @@ point to the messages behind an answer.
 She is meant for everyday conversations across all kinds of topics. The
 personality is part of the concept: warm irony, a little cheekiness, and useful
 answers when the question is serious.
+She refers to herself using feminine grammatical forms.
 
 The name grew out of a meme in the [FastNews chat](https://t.me/fastnewsdev_chat)
 and [Ostrikov's chat](https://t.me/aostrikov_agents_chat). The platinum bob,
@@ -72,9 +72,12 @@ Group mentions and replies do not start an AI conversation.
 Private conversation context lasts until `/clear` or a bot restart. The known-group
 registry and the local history index persist between restarts.
 
-Replies render Markdown emphasis, clickable source links, headings, lists,
-quotes, and code through Telegram text entities. Long replies keep formatting
-when split into messages; literal HTML and incomplete Markdown stay readable.
+Formatted replies use Telegram Rich Messages for Markdown emphasis, source
+links, headings, lists, tables, quotes, code, and collapsible `<details>` sections.
+Plain answers use ordinary messages. Replies outside the native rich limits, or
+explicitly rejected by Telegram, fall back to text entities with formatting
+preserved across message chunks. Network failures do not trigger a second send.
+The transport follows the [Osinara rich-message pattern](https://github.com/nyxandro/osinara/blob/4ca8eff77e0bf403f998aebefedd2deae2e60ba8/agent/lib/telegram-rich-messages.ts).
 
 Messages reach the AI with their original Telegram send time in local time,
 for example `25 October 2026 (Sunday) 12:16:50`. The timezone and UTC offset are

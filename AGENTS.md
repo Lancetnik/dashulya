@@ -64,8 +64,10 @@ to be assigned a place in the hierarchy.
   as `DD Month YYYY (Weekday) HH:MM:SS`, with the timezone and UTC offset alongside
   sender identity in AG2 history. Compute the weekday after timezone conversion.
   Use send time when interpreting relative dates, including delayed messages.
-- **Replies:** render standard Markdown as Telegram text entities in
-  `bot/formatting.py`, preserving formatting and UTF-16 offsets when chunking.
+- **Replies:** prefer native Rich Markdown for supported formatted replies;
+  `bot/formatting.py` checks rich limits and supplies a text-entity fallback,
+  preserving formatting and UTF-16 offsets when chunking. Fall back after an
+  explicit Telegram rejection; avoid a second send after ambiguous network errors.
   Keep the typing indicator and Telegram-length limits. Keep
   provider errors and credentials out of logs and replies. The Jester persona
   and response instructions live in `ai/prompts.py`.

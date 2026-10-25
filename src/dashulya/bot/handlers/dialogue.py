@@ -3,12 +3,13 @@ from time import perf_counter
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyParameters
 from aiogram.utils.chat_action import ChatActionSender
 
 from dashulya.ai.dialogue import Dialogue
-from dashulya.bot.formatting import render_markdown
+from dashulya.bot.formatting import render_markdown, rich_message
 from dashulya.observability import exception_fields
 
 logger = logging.getLogger(__name__)
@@ -58,14 +59,27 @@ async def chat(message: Message, bot: Bot, dialogue: Dialogue) -> None:
                 },
             )
             text = "I couldn't get an AI reply right now. Please try again in a moment."
+    reply_parameters = ReplyParameters(
+        message_id=message.message_id, allow_sending_without_reply=True
+    )
+    rich = rich_message(text)
+    if rich is not None:
+        try:
+            await message.answer_rich(rich, reply_parameters=reply_parameters)
+        except TelegramBadRequest as error:
+            # Only a definitive rejection permits fallback; network failures are ambiguous.
+            logger.warning(
+                "Rich reply rejected; sending text entities",
+                extra={**context, **exception_fields(error)},
+            )
+        else:
+            return
     for chunk, entities in render_markdown(text):
         await message.answer(
             chunk,
             entities=entities,
             parse_mode=None,
-            reply_parameters=ReplyParameters(
-                message_id=message.message_id, allow_sending_without_reply=True
-            ),
+            reply_parameters=reply_parameters,
         )
 
 
