@@ -59,13 +59,16 @@ async def group_chat(
     delivery: FromDishka[ReplyDelivery],
 ) -> None:
     incoming = group_message(message)
+    failure_reason = "context_error"
     try:
-        should_reply = await addressing.should_reply(
+        recent = await dialogue.recent_context(
+            (message.chat.id, message.message_thread_id),
+            through_message_id=message.message_id,
+        )
+        failure_reason = "classifier_error"
+        decision = await addressing.decide(
             incoming,
-            recent_conversation=await dialogue.recent_context(
-                (message.chat.id, message.message_thread_id),
-                through_message_id=message.message_id,
-            ),
+            recent_conversation=recent,
         )
     except Exception as error:
         logger.warning(
@@ -73,6 +76,8 @@ async def group_chat(
             extra={
                 "chat_id": message.chat.id,
                 "message_id": message.message_id,
+                "should_reply": False,
+                "addressing_reason": failure_reason,
                 **exception_fields(error),
             },
         )
@@ -82,10 +87,11 @@ async def group_chat(
         extra={
             "chat_id": message.chat.id,
             "message_id": message.message_id,
-            "should_reply": should_reply,
+            "should_reply": decision.should_reply,
+            "addressing_reason": decision.reason,
         },
     )
-    if should_reply:
+    if decision.should_reply:
         await delivery.reply(message, group_context=incoming.context())
 
 

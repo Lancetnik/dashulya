@@ -67,8 +67,8 @@ The current build responds only to the user configured as its owner. Private
 messages, an explicit @mention of the bot, and replies to its messages start an
 AI conversation directly. Group commands remain available to the owner.
 
-In groups, messages containing “Dashulya” or “Дашуля” (including Russian case
-endings) first go through a separate AG2 decision agent using
+In groups, messages containing “Dashulya”, “Дашуля” or “Дашуль” in any letter case
+(including Russian case endings) first go through a separate AG2 decision agent using
 [OpenAI Decisions](https://docs.ag2.ai/docs/user-guide/decision_models/).
 It distinguishes an invitation to answer from a discussion about the bot. The
 classifier uses `gpt-6-luna` with the same `OPENAI_API_KEY`; `OPENAI_MODEL` selects
@@ -77,6 +77,13 @@ and the observed group context described below. Other group chatter does not
 start a model turn. A negative decision or classifier failure sends
 nothing, including no typing indicator. Explicit mentions and replies bypass
 the classifier, even when it is unavailable.
+
+Addressing logs include `should_reply` and `addressing_reason`. `name_not_found`
+means the name filter skipped the model; `classifier_rejected` means the model
+returned false; `classifier_no_answer` means it returned no decision.
+`context_error` and `classifier_error` identify redacted failures at those stages.
+Successful decisions distinguish `explicit_mention`, `reply_to_bot` and
+`classifier_accepted`.
 
 Each group reply uses a fresh model stream with the latest 20 observed messages
 in that chat/topic, including the current request, plus their reply parents up
@@ -90,6 +97,10 @@ The agent returns structured reply text and an optional target message ID. It
 can reply to another message in the supplied group context; null or an ID outside
 that selection defaults to the triggering message. Every chunk uses the same
 target. Only the reply text is sent to Telegram.
+Requests to answer or greet another participant direct the agent to choose that
+participant's relevant message as the reply target, including channel-authored
+messages identified by the requester. Target-selection logs retain the requested
+ID, effective ID, selection reason and available context IDs; they omit reply text.
 
 Private conversation history lasts until a bot restart or `/clear`. The
 known-group registry and group-message journal persist between restarts.
@@ -179,6 +190,12 @@ read-only. Active evidence, the group registry and live messages persist under
 `var/agent/`; OpenViking uses `var/openviking/`, and logs use `var/logs/`. These
 local files survive container recreation and are excluded from Git. Credentials,
 chat history, logs and developer tools are excluded from the agent image.
+
+Compose bind-mounts `./src` read-only at `/app/src`. `PYTHONPATH` makes these host
+sources take precedence over the installed package in the image. After editing
+Python files, reload the agent with `docker compose restart agent`; Python loads
+the updated modules when its process starts. Rebuild the image when dependencies
+change. The source mount adds no files from the rest of the repository.
 
 For recording ordinary group messages and name-based addressing, make the bot
 an administrator, or

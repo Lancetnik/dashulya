@@ -28,7 +28,7 @@ ai/
   prompts.py             Persona and response instructions
 domain/
   groups.py              Group, GroupRepository, and GroupRegistry
-  messages.py            GroupMessage, Reply and ConversationKey
+  messages.py            GroupMessage, AddressingDecision, Reply and ConversationKey
   memory.py              MemoryBackend, MemoryMessage, MessageRecorder and ChatHistory
 ```
 

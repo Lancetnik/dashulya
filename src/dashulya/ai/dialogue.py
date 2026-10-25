@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from ag2.events import BaseEvent, ModelMessage, ModelRequest, ModelResponse, Tex
 
 from dashulya.domain.memory import ChatHistory, MemoryMessage
 from dashulya.domain.messages import ConversationKey, Reply
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -127,11 +130,13 @@ class Dialogue:
         async with conversation.lock:
             stream = conversation.stream
             allowed_reply_ids: set[int] = set()
+            current_message_id: int | None = None
             if group_context is not None:
                 message_id = group_context.get("message_id")
                 if not isinstance(message_id, int):
                     error_message = "Group replies require a Telegram message ID."
                     raise ValueError(error_message)
+                current_message_id = message_id
                 stream = MemoryStream()
                 allowed_reply_ids.add(message_id)
                 events: list[BaseEvent] = []
@@ -156,14 +161,33 @@ class Dialogue:
                     variables={"user_id": user_id, "chat_id": key[0]},
                 )
                 result = await reply.content()
+            requested_target = result.reply_to_message_id if result is not None else None
             if result is None or not result.text.strip():
-                return Reply("I couldn't generate a text reply. Please try again.")
-            return Reply(
-                result.text.strip(),
-                result.reply_to_message_id
-                if result.reply_to_message_id in allowed_reply_ids
-                else None,
-            )
+                validated = Reply("I couldn't generate a text reply. Please try again.")
+                target_reason = "empty_reply"
+            elif requested_target is None:
+                validated = Reply(result.text.strip())
+                target_reason = "default_current_request"
+            elif requested_target in allowed_reply_ids:
+                validated = Reply(result.text.strip(), requested_target)
+                target_reason = "selected"
+            else:
+                validated = Reply(result.text.strip())
+                target_reason = "outside_context"
+            if current_message_id is not None:
+                logger.info(
+                    "Group reply target selected",
+                    extra={
+                        "chat_id": key[0],
+                        "message_id": current_message_id,
+                        "requested_reply_to_message_id": requested_target,
+                        "reply_to_message_id": validated.reply_to_message_id
+                        or current_message_id,
+                        "reply_target_reason": target_reason,
+                        "context_message_ids": sorted(allowed_reply_ids),
+                    },
+                )
+            return validated
 
     async def clear(self, key: ConversationKey) -> None:
         conversation = self._conversations.get(key)

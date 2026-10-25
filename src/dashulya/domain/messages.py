@@ -1,7 +1,21 @@
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 ConversationKey = tuple[int, int | None]
+
+
+@dataclass(frozen=True)
+class AddressingDecision:
+    should_reply: bool
+    reason: Literal[
+        "reply_to_bot",
+        "explicit_mention",
+        "name_not_found",
+        "classifier_accepted",
+        "classifier_rejected",
+        "classifier_no_answer",
+    ]
 
 
 @dataclass(frozen=True)

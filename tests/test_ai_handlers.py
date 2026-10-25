@@ -394,6 +394,9 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("dashulya.bot.handlers.dialogue", level="WARNING") as logs:
             await self.message("Dashulya, help", chat=GROUP)
         self.assertNotIn("sk-secret", str(logs.output))
+        self.assertEqual(
+            logs.records[-1].__dict__["addressing_reason"], "classifier_error"
+        )
         self.dialogue.reply.assert_not_awaited()
         self.requests.assert_not_awaited()
         await self.message(
@@ -405,10 +408,76 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.decision_agent.ask.assert_awaited_once()
 
     async def test_agent_name_requires_word_boundaries(self) -> None:
-        for text in ("dashulya_bot", "megadashulya", "Дашуля123"):  # ruff: ignore[ambiguous-unicode-character-string] -- Cyrillic next to digits.
+        for text in (
+            "dashulya_bot",
+            "megadashulya",
+            "Дашуля123",  # ruff: ignore[ambiguous-unicode-character-string] -- Cyrillic name next to digits.
+            "супердашуль",
+            "дашуль123",  # ruff: ignore[ambiguous-unicode-character-string] -- Cyrillic name next to digits.
+            "дашуль_бот",
+        ):
             await self.message(text, chat=GROUP)
         self.decision_agent.ask.assert_not_awaited()
         self.dialogue.reply.assert_not_awaited()
+
+    async def test_negative_decisions_log_the_actual_refusal_reason(self) -> None:
+        for text, answer, reason in (
+            ("Hello", False, "name_not_found"),
+            ("дашуль, привет", False, "classifier_rejected"),
+            ("ДАШУЛЬ, привет", None, "classifier_no_answer"),
+        ):
+            with self.subTest(reason=reason):
+                self.decision_agent.ask.return_value.content.return_value = answer
+                with self.assertLogs(
+                    "dashulya.bot.handlers.dialogue", level="INFO"
+                ) as logs:
+                    await self.message(text, chat=GROUP)
+                record = logs.records[-1]
+                self.assertEqual(record.__dict__["addressing_reason"], reason)
+                self.assertFalse(record.__dict__["should_reply"])
+        self.assertEqual(self.decision_agent.ask.await_count, 2)
+        self.dialogue.reply.assert_not_awaited()
+        self.requests.assert_not_awaited()
+
+    async def test_context_error_is_logged_separately_without_classifier_call(
+        self,
+    ) -> None:
+        self.dialogue.recent_context.side_effect = RuntimeError("PRIVATE CONTEXT")
+        with self.assertLogs("dashulya.bot.handlers.dialogue", level="WARNING") as logs:
+            await self.message("дашуль, помоги", chat=GROUP)
+        self.assertEqual(logs.records[-1].__dict__["addressing_reason"], "context_error")
+        self.assertNotIn("PRIVATE CONTEXT", str(logs.output))
+        self.decision_agent.ask.assert_not_awaited()
+        self.dialogue.reply.assert_not_awaited()
+        self.requests.assert_not_awaited()
+
+    async def test_lowercase_vocative_is_classified_and_replied_to(self) -> None:
+        self.decision_agent.ask.return_value.content.return_value = True
+        with self.assertLogs("dashulya.bot.handlers.dialogue", level="INFO") as logs:
+            await self.message("дашуль, передай привет", chat=GROUP)
+        self.assertEqual(
+            logs.records[-1].__dict__["addressing_reason"], "classifier_accepted"
+        )
+        self.decision_agent.ask.assert_awaited_once()
+        self.dialogue.reply.assert_awaited_once()
+
+    async def test_direct_mention_logs_bypass_reason(self) -> None:
+        with self.assertLogs("dashulya.bot.handlers.dialogue", level="INFO") as logs:
+            await self.message(
+                "@dashulya_bot hi",
+                chat=GROUP,
+                entities=[
+                    {
+                        "type": "mention",
+                        "offset": 0,
+                        "length": 13,
+                    }
+                ],
+            )
+        self.assertEqual(
+            logs.records[-1].__dict__["addressing_reason"], "explicit_mention"
+        )
+        self.decision_agent.ask.assert_not_awaited()
 
     async def test_clear_targets_private_chat_and_never_calls_ai(self) -> None:
         await self.message("/clear")

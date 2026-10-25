@@ -21,6 +21,11 @@ _CONTEXT_FIELDS = (
     "request_id",
     "model",
     "should_reply",
+    "addressing_reason",
+    "requested_reply_to_message_id",
+    "reply_to_message_id",
+    "reply_target_reason",
+    "context_message_ids",
     "exceptions",
 )
 

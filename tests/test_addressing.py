@@ -87,3 +87,45 @@ class GroupAddressingTests(unittest.IsolatedAsyncioTestCase):
             await self.addressing.should_reply(
                 replace(MESSAGE, text="Dashulya, help"), recent_conversation=[]
             )
+
+    async def test_vocative_name_reaches_classifier_in_any_case(self) -> None:
+        for name in ("дашуль", "Дашуль", "ДАШУЛЬ"):
+            with self.subTest(name=name):
+                self.agent.ask.reset_mock()
+                result = await self.addressing.should_reply(
+                    replace(MESSAGE, text=f"{name}, ты теперь и меня игноришь?"),
+                    recent_conversation=[],
+                )
+                self.agent.ask.assert_awaited_once()
+                self.assertTrue(result)
+
+    async def test_decision_explains_each_direct_and_model_path(self) -> None:
+        for message, expected in (
+            (MESSAGE, (False, "name_not_found")),
+            (
+                replace(MESSAGE, mentioned_usernames=("DASHULYA_BOT",)),
+                (True, "explicit_mention"),
+            ),
+            (
+                replace(
+                    MESSAGE, reply_to=replace(MESSAGE, sender_id=123, sender_is_bot=True)
+                ),
+                (True, "reply_to_bot"),
+            ),
+        ):
+            with self.subTest(expected=expected):
+                decision = await self.addressing.decide(message, recent_conversation=[])
+                self.assertEqual((decision.should_reply, decision.reason), expected)
+        self.agent.ask.assert_not_awaited()
+        for answer, reason in (
+            (True, "classifier_accepted"),
+            (False, "classifier_rejected"),
+            (None, "classifier_no_answer"),
+        ):
+            with self.subTest(answer=answer):
+                self.agent.ask.return_value.content.return_value = answer
+                decision = await self.addressing.decide(
+                    replace(MESSAGE, text="дашуль, помоги"), recent_conversation=[]
+                )
+                self.assertEqual(decision.should_reply, answer is True)
+                self.assertEqual(decision.reason, reason)

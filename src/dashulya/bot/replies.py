@@ -61,6 +61,7 @@ class ReplyDelivery:
                     extra={
                         **context,
                         "duration_ms": round((perf_counter() - started) * 1000),
+                        "reply_to_message_id": reply_to_message_id,
                     },
                 )
             except Exception as error:

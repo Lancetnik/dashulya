@@ -419,15 +419,28 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
                     TestConfig(reply_json("  Answer  ", target)), tools=[]
                 )
                 dialogue = Dialogue(agent, history=self.history, bot_id=123)
-                result = await dialogue.reply(
-                    (-123, None),
-                    "Current request",
-                    user_id=42,
-                    user_name="Anna",
-                    sent_at=SENT_AT,
-                    group_context={"message_id": 5},
-                )
+                with self.assertLogs("dashulya.ai.dialogue", level="INFO") as logs:
+                    result = await dialogue.reply(
+                        (-123, None),
+                        "Current request",
+                        user_id=42,
+                        user_name="Anna",
+                        sent_at=SENT_AT,
+                        group_context={"message_id": 5},
+                    )
                 self.assertEqual(result, Reply("Answer", expected))
+                event = logs.records[-1].__dict__
+                self.assertEqual(event["requested_reply_to_message_id"], target)
+                self.assertEqual(event["reply_to_message_id"], expected or 5)
+                self.assertEqual(event["context_message_ids"], [1, 5])
+                reason = (
+                    "default_current_request"
+                    if target is None
+                    else "selected"
+                    if expected is not None
+                    else "outside_context"
+                )
+                self.assertEqual(event["reply_target_reason"], reason)
 
     async def test_private_reply_ignores_model_selected_message_id(self) -> None:
         agent = create_reply_agent(

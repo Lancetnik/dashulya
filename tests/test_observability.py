@@ -81,6 +81,21 @@ class LoggingTests(unittest.TestCase):
         self.assertTrue(event["exceptions"][0]["frames"])
         self.assertNotIn(private_text, self.path.read_text())
 
+    def test_json_logs_preserve_addressing_decision_reason(self) -> None:
+        configure_logging(self.path)
+        self.root.info(
+            "Group addressing decision completed",
+            extra={
+                "chat_id": -123,
+                "message_id": 42,
+                "should_reply": False,
+                "addressing_reason": "name_not_found",
+            },
+        )
+        event = json.loads(self.path.read_text())
+        self.assertFalse(event["should_reply"])
+        self.assertEqual(event["addressing_reason"], "name_not_found")
+
     def test_exception_chains_and_exception_arguments_hide_contents(self) -> None:
         configure_logging(self.path)
         private_text = "PRIVATE USER TEXT"
@@ -99,6 +114,25 @@ class LoggingTests(unittest.TestCase):
         self.assertEqual(
             [item["type"] for item in event["exceptions"]], ["RuntimeError", "ValueError"]
         )
+
+    def test_json_logs_preserve_requested_and_effective_reply_targets(self) -> None:
+        configure_logging(self.path)
+        self.root.info(
+            "Group reply target selected",
+            extra={
+                "chat_id": -123,
+                "message_id": 5,
+                "requested_reply_to_message_id": 999,
+                "reply_to_message_id": 5,
+                "reply_target_reason": "outside_context",
+                "context_message_ids": [1, 5],
+            },
+        )
+        event = json.loads(self.path.read_text())
+        self.assertEqual(event["requested_reply_to_message_id"], 999)
+        self.assertEqual(event["reply_to_message_id"], 5)
+        self.assertEqual(event["reply_target_reason"], "outside_context")
+        self.assertEqual(event["context_message_ids"], [1, 5])
 
     def test_rotation_keeps_bounded_backups_with_valid_json_lines(self) -> None:
         configure_logging(self.path, max_bytes=500, backup_count=2)

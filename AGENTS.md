@@ -52,7 +52,8 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
   silently ignored before command execution or reply/addressing model invocation.
   Forwarded identities and `/start` do not grant access.
 - **Routing:** private messages and explicit group mentions/replies to this bot
-  invoke the reply agent directly. Group messages naming Dashulya first pass an
+  invoke the reply agent directly. Group messages naming Dashulya, including
+  “Дашуль” in any letter case, first pass an
   AG2 OpenAI Decisions classifier with bounded chat/topic context; a negative
   decision or failure stays silent. `/clear` operates in private chats. Group
   commands remain available to the owner. Group tracking runs before owner access

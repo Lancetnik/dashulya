@@ -11,6 +11,8 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
       OPENAI_DECISION_MODEL: ${OPENAI_DECISION_MODEL:-gpt-6-luna}
       BOT_TIMEZONE: ${BOT_TIMEZONE:-Europe/Moscow}
+      PYTHONPATH: /app/src
+      PYTHONDONTWRITEBYTECODE: "1"
       DATABASE_PATH: /var/lib/dashulya/dashulya.sqlite3
       LOG_PATH: /var/log/dashulya/dashulya.log
       MEMORY_PATH: /memory/evidence.sqlite3
@@ -19,6 +21,12 @@ services:
       OPENVIKING_URL: http://openviking:1933
       OPENVIKING_API_KEY: ${OPENVIKING_API_KEY:?Set OPENVIKING_API_KEY in .env}
     volumes:
+      - type: bind
+        source: ./src
+        target: /app/src
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: ${MEMORY_PATH:-./var/agent/evidence.sqlite3}
         target: /memory/evidence.sqlite3
