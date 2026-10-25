@@ -65,10 +65,10 @@ lint = [
     "detect-secrets==1.5.0",
     "import-linter>=2.9,<3",
     "mypy==1.19.1",
-    "pre-commit==4.5.1",
+    "pre-commit==4.7.0",
     "pre-commit-hooks==6.0.0",
-    "ruff==0.14.14",
-    "typos==1.30.3",
+    "ruff==0.17.1",
+    "typos==1.51.1",
 ]
 dev = [
     {include-group = "lint"},
