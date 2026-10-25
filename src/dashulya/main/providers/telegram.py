@@ -1,0 +1,44 @@
+from collections.abc import AsyncIterator
+
+from aiogram import Bot, Dispatcher
+from aiogram.types import TelegramObject
+from dishka import AsyncContainer, Provider, from_context, provide
+from dishka.integrations.aiogram import AiogramMiddlewareData, setup_dishka
+from dishka_ag2 import AG2Scope
+
+from dashulya.bot.middlewares.access import OwnerOnlyMiddleware
+from dashulya.bot.middlewares.group_tracking import TrackGroupsMiddleware
+from dashulya.bot.replies import ReplyDelivery
+from dashulya.bot.router import create_router
+from dashulya.main.config import Settings
+
+
+class TelegramProvider(Provider):
+    scope = AG2Scope.APP
+
+    tracking = provide(TrackGroupsMiddleware)
+    delivery = provide(ReplyDelivery)
+    # AiogramProvider uses Scope.REQUEST; both integrations share AG2Scope here.
+    event = from_context(TelegramObject, scope=AG2Scope.REQUEST)
+    middleware_data = from_context(AiogramMiddlewareData, scope=AG2Scope.REQUEST)
+
+    @provide
+    async def bot(self, settings: Settings) -> AsyncIterator[Bot]:
+        async with Bot(token=settings.bot_token) as bot:
+            yield bot
+
+    @provide
+    def access(self, settings: Settings) -> OwnerOnlyMiddleware:
+        return OwnerOnlyMiddleware(settings.owner_user_id)
+
+    @provide
+    def dispatcher(
+        self,
+        container: AsyncContainer,
+        tracking: TrackGroupsMiddleware,
+        access: OwnerOnlyMiddleware,
+    ) -> Dispatcher:
+        dispatcher = Dispatcher()
+        dispatcher.include_router(create_router(tracking=tracking, access=access))
+        setup_dishka(container=container, router=dispatcher)
+        return dispatcher

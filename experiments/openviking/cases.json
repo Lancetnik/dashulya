@@ -1,0 +1,23 @@
+[
+  {"id": "bot-style-keywords", "category": "keywords", "query": "стиль написания бота", "expected": [15100]},
+  {"id": "framework-keywords", "category": "keywords", "query": "eve фреймворке", "expected": [15101]},
+  {"id": "ag2-repo-keywords", "category": "keywords", "query": "github ag2ai ag2", "expected": [15110]},
+  {"id": "shadow-it-keywords", "category": "keywords", "query": "теневой отдел", "expected": [15093]},
+  {"id": "subscription-keywords", "category": "keywords", "query": "opencode deepseek", "expected": [19027]},
+  {"id": "mcp-keywords", "category": "keywords", "query": "pal mcp server", "expected": [19035]},
+  {"id": "design-keywords", "category": "keywords", "query": "html фигму", "expected": [19081]},
+  {"id": "price-keywords", "category": "keywords", "query": "миллиард токенов", "expected": [19070]},
+  {"id": "bot-style-paraphrase", "category": "paraphrase", "query": "Кто хотел сделать чат-бота со своей манерой письма на основе Осинары?", "expected": [15100]},
+  {"id": "framework-paraphrase", "category": "paraphrase", "query": "Какой фреймворк посоветовали для быстрой сборки своего бота?", "expected": [15101]},
+  {"id": "ag2-repo-paraphrase", "category": "paraphrase", "query": "Ссылка на исходники фреймворка AG2", "expected": [15110]},
+  {"id": "shadow-it-paraphrase", "category": "paraphrase", "query": "Сотрудники самостоятельно автоматизируют работу в обход внутреннего ИТ", "expected": [15093]},
+  {"id": "subscription-paraphrase", "category": "paraphrase", "query": "Как получить доступ к DeepSeek через подписку на другой сервис?", "expected": [19027]},
+  {"id": "mcp-paraphrase", "category": "paraphrase", "query": "Подключение корпоративной GLM как помощника для Codex через MCP", "expected": [19035]},
+  {"id": "design-paraphrase", "category": "paraphrase", "query": "Как дизайнеры сначала делают интерфейс кодом, а затем переносят в графический редактор?", "expected": [19081]},
+  {"id": "price-paraphrase", "category": "paraphrase", "query": "Кто говорил о цене шестнадцать долларов за миллиард токенов?", "expected": [19070]},
+  {"id": "author-filter", "category": "filter", "query": "свой стиль бота", "author_id": 548919987, "expected": [15100]},
+  {"id": "time-filter", "category": "filter", "query": "html фигму", "after": "2026-10-25T08:40:17+03:00", "before": "2026-10-25T08:40:17+03:00", "expected": [19081]},
+  {"id": "unknown-author", "category": "negative-filter", "query": "бот", "author_id": 999999999999, "expected": []},
+  {"id": "outside-coverage", "category": "negative-filter", "query": "figma", "after": "2030-01-01T00:00:00Z", "expected": []},
+  {"id": "absent-topic", "category": "negative-topic", "query": "Расписание кормления пингвинов в антарктическом зоопарке", "expected": []}
+]

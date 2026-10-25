@@ -13,10 +13,15 @@ class Settings:
     openai_api_key: str = field(repr=False)
     owner_user_id: int
     openai_model: str = "gpt-5.6-luna"
-    database_path: Path = Path("data/dashulya.sqlite3")
-    memory_path: Path = Path("data/memory.sqlite3")
+    openai_decision_model: str = "gpt-6-luna"
+    database_path: Path = Path("data/runtime/dashulya.sqlite3")
+    memory_path: Path = Path("data/experiments/openviking/pilot.sqlite3")
     log_path: Path = Path("logs/dashulya.log")
     bot_timezone: str = "Europe/Moscow"
+    openviking_url: str = "http://127.0.0.1:1933"
+    openviking_manifest: Path = Path("data/experiments/openviking/export/manifest.json")
+    openviking_api_key: str = field(default="", repr=False)
+    healthcheck_path: Path | None = None
 
 
 def load_settings() -> Settings:
@@ -59,8 +64,21 @@ def load_settings() -> Settings:
         openai_api_key=api_key,
         owner_user_id=owner_user_id,
         openai_model=os.getenv("OPENAI_MODEL", "").strip() or "gpt-5.6-luna",
-        database_path=Path(os.getenv("DATABASE_PATH") or "data/dashulya.sqlite3"),
-        memory_path=Path(os.getenv("MEMORY_PATH") or "data/memory.sqlite3"),
+        openai_decision_model=os.getenv("OPENAI_DECISION_MODEL", "").strip()
+        or "gpt-6-luna",
+        database_path=Path(os.getenv("DATABASE_PATH") or "data/runtime/dashulya.sqlite3"),
+        memory_path=Path(
+            os.getenv("MEMORY_PATH") or "data/experiments/openviking/pilot.sqlite3"
+        ),
         log_path=Path(os.getenv("LOG_PATH") or "logs/dashulya.log"),
         bot_timezone=bot_timezone,
+        openviking_url=os.getenv("OPENVIKING_URL", "").strip() or "http://127.0.0.1:1933",
+        openviking_manifest=Path(
+            os.getenv("OPENVIKING_MANIFEST")
+            or "data/experiments/openviking/export/manifest.json"
+        ),
+        openviking_api_key=os.getenv("OPENVIKING_API_KEY", "").strip(),
+        healthcheck_path=Path(value)
+        if (value := os.getenv("HEALTHCHECK_PATH"))
+        else None,
     )

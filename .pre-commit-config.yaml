@@ -88,5 +88,5 @@ repos:
         name: Import Linter
         entry: just import-linter
         language: system
-        files: ^(src/|pyproject\.toml$|justfile$)
+        files: ^(src/|\.importlinter$|pyproject\.toml$|justfile$)
         pass_filenames: false

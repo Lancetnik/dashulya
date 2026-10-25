@@ -1,14 +1,8 @@
 import sqlite3
-from dataclasses import dataclass
 from itertools import starmap
 from pathlib import Path
 
-
-@dataclass(frozen=True)
-class Group:
-    chat_id: int
-    title: str
-    username: str | None = None
+from dashulya.domain.groups import Group
 
 
 class GroupStore:

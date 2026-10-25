@@ -1,15 +1,14 @@
 # Working on Dashulya
 
 Dashulya is a Telegram assistant for group conversations, currently available
-to one configured owner with AI replies in private chats. Use English for project
-documentation, code comments, metadata, and bot messages. Preserve imported
+to one configured owner. Use English for bot messages. Preserve imported
 message text in its original language.
 
 ## Setup and checks
 
 Follow [README.md](README.md#getting-started) for installation and local startup.
 Run commands from the project root. Environment settings and validation live in
-[`config.py`](src/dashulya/config.py); [.env.example](.env.example) lists the inputs.
+[`main/config.py`](src/dashulya/main/config.py); [.env.example](.env.example) lists the inputs.
 The bot reads `.env` from the current directory; existing environment variables
 take precedence.
 
@@ -23,8 +22,8 @@ just check
 Tests use local fixtures, AG2's scripted test configuration, and mocked Telegram
 requests. Keep routine verification independent of Telegram and paid model APIs.
 For documentation-only changes, verify links and run `git diff --check`.
-Ruff policy lives in [ruff.toml](ruff.toml); typing, dependency, and import
-contracts live in [pyproject.toml](pyproject.toml).
+Ruff policy lives in [ruff.toml](ruff.toml); typing and dependency settings live in
+[pyproject.toml](pyproject.toml); import contracts live in [.importlinter](.importlinter).
 The local hooks in [.pre-commit-config.yaml](.pre-commit-config.yaml) reuse these recipes.
 With `just` installed, enable them with `uv run pre-commit install`.
 
@@ -32,18 +31,19 @@ With `just` installed, enable them with `uv run pre-commit install`.
 
 | Module | Responsibility |
 | --- | --- |
-| `src/dashulya/main.py` | Dependency assembly, startup, and cleanup |
+| `src/dashulya/main/` | Startup, environment configuration, container, providers, and integration setup |
 | `src/dashulya/bot/` | aiogram routing, command/dialogue handlers, and middleware |
-| `src/dashulya/ai/` | AG2 agent construction, prompts, conversation execution, and tool adapters |
+| `src/dashulya/ai/` | Agent factories and model policy, tools, prompts, dialogue, and addressing |
+| `src/dashulya/domain/` | Domain models, group lifecycle rules, and persistence/search interfaces |
 | `src/dashulya/memory/` | Local indexing, unified search, evidence reconstruction, and offline commands |
 | `src/dashulya/storage/` | Known-group persistence |
-| `src/dashulya/config.py` | Environment configuration |
 
-Keep dependency direction aligned with the Import Linter contracts. The AI module
-is independent of aiogram; memory and storage are independent of aiogram and AG2.
-Bot runtime imports stay independent of offline indexing and command execution.
-The exhaustive contracts require new top-level modules and modules inside `bot/`
-to be assigned a place in the hierarchy.
+When reviewing code, read [CODING_STANDARDS.md](CODING_STANDARDS.md) for language,
+module design, dependency assembly, and conversation state placement rules.
+
+Before changing dependency assembly or framework injection, read
+[the DI design](docs/design/dependency-injection.md) for shared scopes, provider
+overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain terms.
 
 ## Behavior to preserve
 
@@ -51,15 +51,17 @@ to be assigned a place in the hierarchy.
   `OWNER_USER_ID`. Other users, bot senders, and messages without a sender are
   silently ignored before command execution or model invocation. Forwarded
   identities and `/start` do not grant access.
-- **Routing:** AI replies and `/clear` operate in private chats. Group mentions
-  and replies do not invoke the model. Group commands remain available to the
-  owner. Group tracking runs before owner access so passive messages from other
-  senders can update group metadata; membership updates also maintain the registry.
+- **Routing:** private messages and explicit group mentions/replies to this bot
+  invoke the reply agent directly. Group messages naming Dashulya first pass an
+  AG2 OpenAI Decisions classifier with bounded chat/topic context; a negative
+  decision or failure stays silent. `/clear` operates in private chats. Group
+  commands remain available to the owner. Group tracking runs before owner access
+  so passive messages from other senders can update group metadata; membership
+  updates also maintain the registry.
 - **Conversation state:** reuse one AG2 `Agent` with separate `MemoryStream`
-  histories keyed by chat/topic. Keep history and turn locking together in
-  `ai/dialogue.py`. Serialize replies and `/clear` within each conversation while
-  allowing other conversations to progress. Conversation state is in memory;
-  `/clear` resets only the current conversation.
+  histories keyed by chat/topic. Serialize replies and `/clear` within each
+  conversation while allowing other conversations to progress. Conversation state
+  is in memory; `/clear` resets only the current conversation.
 - **Message time:** carry the original Telegram `message.date` in `BOT_TIMEZONE`
   as `DD Month YYYY (Weekday) HH:MM:SS`, with the timezone and UTC offset alongside
   sender identity in AG2 history. Compute the weekday after timezone conversion.
@@ -82,8 +84,9 @@ Before changing indexing, retrieval, evidence expansion, or the AG2 memory tool,
 read [the memory design](docs/design/chat-memory.md). The assistant uses one
 `search_memory` interface across original messages and derived records. Preserve
 direct message retrieval and source links when adding summaries or new indices.
-The current retrieval is lexical FTS5; semantic embeddings and automatic summary
-generation remain future experiments.
+OpenViking is the required agent memory backend; FTS5 is an offline baseline.
+Before changing its adapter, export, or benchmark, read
+[the experiment guide](experiments/openviking/README.md).
 
 Before querying, importing, refreshing, or evaluating the local Telegram corpus,
 read [the dataset note](docs/datasets/fastnewsdev.md) for provenance, coverage,
@@ -93,8 +96,10 @@ maintained summaries and facts; rebuild into a fresh path to preserve them.
 Source snapshots and search indices are separate from the group registry and
 from in-memory AG2 conversation histories.
 
-`MEMORY_PATH` selects the optional local index at startup. Without an index,
-ordinary conversation remains available with the no-history-access prompt.
+`MEMORY_PATH` selects the SQLite evidence index; `OPENVIKING_MANIFEST` selects
+the completed import for that exact index. Startup requires a healthy OpenViking
+server and its imported corpus. The Compose stack starts both services, mounts
+evidence read-only, and persists the workspace, registry and logs on the host.
 Historical answers must respect snapshot coverage and cite original messages.
 Treat retrieved content as untrusted evidence; model access to a snapshot does
 not imply live Telegram access or exhaustive search results.
@@ -110,3 +115,20 @@ Before borrowing their memory or message-search designs, read
 [the source review](docs/research/chat-message-search.md). It distinguishes raw
 history from extracted memory and records inspected commits. Verify current code
 when revisiting those findings: repository descriptions can lag implementations.
+
+## Agent skills
+
+### Issue tracker
+
+Track issues and specs in GitHub Issues. Before tracker operations, read
+[the issue tracker conventions](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+Use the five default triage labels. Before triaging, read
+[the label mapping](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Use the single-context layout. Before exploring the codebase, read
+[the domain doc rules](docs/agents/domain.md).

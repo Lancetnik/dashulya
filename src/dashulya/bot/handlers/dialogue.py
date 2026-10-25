@@ -1,94 +1,111 @@
 import logging
-from time import perf_counter
 
-from aiogram import Bot, F, Router
-from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramBadRequest
+from aiogram import F, Router
+from aiogram.enums import ChatType, MessageEntityType
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyParameters
-from aiogram.utils.chat_action import ChatActionSender
+from aiogram.types import Message
+from dishka.integrations.aiogram import FromDishka, inject
 
+from dashulya.ai.addressing import GroupAddressing
 from dashulya.ai.dialogue import Dialogue
-from dashulya.bot.formatting import render_markdown, rich_message
+from dashulya.bot.replies import ReplyDelivery
+from dashulya.domain.messages import GroupMessage
 from dashulya.observability import exception_fields
 
 logger = logging.getLogger(__name__)
 
 
-async def clear(message: Message, dialogue: Dialogue) -> None:
+def group_message(message: Message, *, include_reply: bool = True) -> GroupMessage:
+    sender = message.from_user
+    text = message.text or message.caption or ""
+    return GroupMessage(
+        message_id=message.message_id,
+        text=text,
+        sent_at=message.date,
+        sender_id=sender.id if sender else None,
+        sender_name=sender.full_name if sender else None,
+        sender_is_bot=sender.is_bot if sender else False,
+        mentioned_usernames=tuple(
+            entity.extract_from(text).removeprefix("@")
+            for entity in message.entities or []
+            if entity.type == MessageEntityType.MENTION
+        ),
+        mentioned_user_ids=tuple(
+            entity.user.id
+            for entity in message.entities or []
+            if entity.type == MessageEntityType.TEXT_MENTION and entity.user is not None
+        ),
+        reply_to=(
+            group_message(message.reply_to_message, include_reply=False)
+            if include_reply and message.reply_to_message is not None
+            else None
+        ),
+    )
+
+
+@inject
+async def group_chat(
+    message: Message,
+    dialogue: FromDishka[Dialogue],
+    addressing: FromDishka[GroupAddressing],
+    delivery: FromDishka[ReplyDelivery],
+) -> None:
+    incoming = group_message(message)
+    try:
+        should_reply = await addressing.should_reply(
+            incoming,
+            recent_conversation=await dialogue.recent_context((
+                message.chat.id,
+                message.message_thread_id,
+            )),
+        )
+    except Exception as error:
+        logger.warning(
+            "Group addressing decision failed",
+            extra={
+                "chat_id": message.chat.id,
+                "message_id": message.message_id,
+                **exception_fields(error),
+            },
+        )
+        return
+    logger.info(
+        "Group addressing decision completed",
+        extra={
+            "chat_id": message.chat.id,
+            "message_id": message.message_id,
+            "should_reply": should_reply,
+        },
+    )
+    if should_reply:
+        await delivery.reply(message, group_context=incoming.context())
+
+
+@inject
+async def clear(message: Message, dialogue: FromDishka[Dialogue]) -> None:
     await dialogue.clear((message.chat.id, message.message_thread_id))
     await message.answer("Conversation cleared. Let's start fresh 💋")
 
 
-async def chat(message: Message, bot: Bot, dialogue: Dialogue) -> None:
-    # The router accepts only text messages with a sender.
-    assert message.text is not None
-    assert message.from_user is not None
-    started = perf_counter()
-    context: dict[str, object] = {
-        "chat_id": message.chat.id,
-        "message_id": message.message_id,
-    }
-    logger.info("AI request started", extra=context)
-    async with ChatActionSender.typing(
-        bot=bot, chat_id=message.chat.id, message_thread_id=message.message_thread_id
-    ):
-        try:
-            text = await dialogue.reply(
-                (message.chat.id, message.message_thread_id),
-                message.text,
-                user_id=message.from_user.id,
-                user_name=message.from_user.full_name,
-                sent_at=message.date,
-            )
-            logger.info(
-                "AI reply generated",
-                extra={
-                    **context,
-                    "duration_ms": round((perf_counter() - started) * 1000),
-                },
-            )
-        except Exception as error:
-            # Provider errors can contain request data; keep those out of logs and replies.
-            logger.warning(
-                "AI reply failed",
-                extra={
-                    **context,
-                    **exception_fields(error),
-                    "duration_ms": round((perf_counter() - started) * 1000),
-                },
-            )
-            text = "I couldn't get an AI reply right now. Please try again in a moment."
-    reply_parameters = ReplyParameters(
-        message_id=message.message_id, allow_sending_without_reply=True
-    )
-    rich = rich_message(text)
-    if rich is not None:
-        try:
-            await message.answer_rich(rich, reply_parameters=reply_parameters)
-        except TelegramBadRequest as error:
-            # Only a definitive rejection permits fallback; network failures are ambiguous.
-            logger.warning(
-                "Rich reply rejected; sending text entities",
-                extra={**context, **exception_fields(error)},
-            )
-        else:
-            return
-    for chunk, entities in render_markdown(text):
-        await message.answer(
-            chunk,
-            entities=entities,
-            parse_mode=None,
-            reply_parameters=reply_parameters,
-        )
+@inject
+async def chat(message: Message, delivery: FromDishka[ReplyDelivery]) -> None:
+    await delivery.reply(message)
 
 
 def create_router() -> Router:
     router = Router(name=__name__)
-    router.message.filter(F.chat.type == ChatType.PRIVATE)
-    router.message.register(clear, Command("clear"))
+    router.message.register(clear, Command("clear"), F.chat.type == ChatType.PRIVATE)
     router.message.register(
         chat,
+        F.text,
+        ~F.text.startswith("/"),
+        F.from_user,
+        ~F.from_user.is_bot,
+        F.chat.type == ChatType.PRIVATE,
+    )
+    router.message.register(
+        group_chat,
+        F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
         F.text,
         ~F.text.startswith("/"),
         F.from_user,

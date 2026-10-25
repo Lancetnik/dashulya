@@ -48,7 +48,7 @@ mypy:
 
 # Check the architecture contracts.
 import-linter:
-    just _lint lint-imports
+    just _lint lint-imports --config .importlinter
 
 # Check that the lockfile matches project metadata.
 lock-check:

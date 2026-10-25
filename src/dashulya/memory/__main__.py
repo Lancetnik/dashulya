@@ -1,6 +1,7 @@
 """Local indexing and inspection without Telegram or model API calls."""
 
 import argparse
+import asyncio
 import json
 import sqlite3
 from pathlib import Path
@@ -9,7 +10,7 @@ from dashulya.memory.index import build_memory
 from dashulya.memory.search import MemorySearch
 
 
-def main() -> None:
+async def run() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index", type=Path, default=Path("data/memory.sqlite3"))
     commands = parser.add_subparsers(dest="command", required=True)
@@ -43,9 +44,9 @@ def main() -> None:
         if args.command == "build":
             result = build_memory(args.source, args.index, chat_username=args.chat)
         else:
-            memory = MemorySearch(args.index)
+            memory = await MemorySearch.open(args.index)
             if args.command == "search":
-                result = memory.search(
+                result = await memory.search(
                     args.query,
                     author_id=args.author,
                     after=args.after,
@@ -53,7 +54,7 @@ def main() -> None:
                     limit=args.limit,
                 )
             elif args.command == "expand":
-                result = memory.search(memory_id=args.memory_id)
+                result = await memory.search(memory_id=args.memory_id)
             else:
                 result = {
                     "memory_id": memory.remember(args.text, args.sources, kind=args.kind)
@@ -61,6 +62,10 @@ def main() -> None:
     except (ValueError, OSError, sqlite3.Error) as error:
         parser.error(str(error))
     print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def main() -> None:
+    asyncio.run(run())
 
 
 if __name__ == "__main__":

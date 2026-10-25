@@ -1,0 +1,102 @@
+# Architecture contracts. Run with: just import-linter
+# Layers run from highest to lowest; | separates mutually independent modules.
+# Exhaustive contracts require every immediate child module to be assigned.
+
+[importlinter]
+root_package = dashulya
+include_external_packages = True
+
+[importlinter:contract:module-hierarchy]
+name = Application imports follow the module hierarchy
+type = layers
+containers =
+    dashulya
+layers =
+    __main__
+    main
+    bot
+    ai
+    memory | storage | observability
+    domain
+exhaustive = True
+
+[importlinter:contract:main-hierarchy]
+name = Application assembly separates runtime, graph, providers and configuration
+type = layers
+containers =
+    dashulya.main
+layers =
+    runtime
+    container
+    providers
+    config
+exhaustive = True
+
+[importlinter:contract:ai-hierarchy]
+name = AI owns agents, tools, prompts and execution
+type = layers
+containers =
+    dashulya.ai
+layers =
+    agents | dialogue | addressing
+    tools
+    prompts
+exhaustive = True
+
+[importlinter:contract:infrastructure-without-di]
+name = Domain and infrastructure are independent of dependency injection and main
+type = forbidden
+source_modules =
+    dashulya.domain
+    dashulya.memory
+    dashulya.storage
+    dashulya.observability
+forbidden_modules =
+    dishka
+    dishka_ag2
+    dashulya.main
+
+[importlinter:contract:telegram-routing]
+name = Telegram routing assembles handlers and middleware
+type = layers
+containers =
+    dashulya.bot
+layers =
+    router
+    handlers
+    middlewares | replies
+    formatting
+exhaustive = True
+
+[importlinter:contract:independent-domain]
+name = Domain, memory and storage are independent of Telegram and AG2
+type = forbidden
+source_modules =
+    dashulya.domain
+    dashulya.memory
+    dashulya.storage
+forbidden_modules =
+    aiogram
+    ag2
+
+[importlinter:contract:ai-without-telegram]
+name = AI execution is independent of aiogram
+type = forbidden
+source_modules =
+    dashulya.ai
+forbidden_modules =
+    aiogram
+
+[importlinter:contract:runtime-without-offline]
+name = Bot runtime does not depend on offline memory commands or indexing
+type = forbidden
+source_modules =
+    dashulya.bot
+    dashulya.ai
+    dashulya.domain
+    dashulya.storage
+forbidden_modules =
+    dashulya.memory.__main__
+    dashulya.memory.index
+    dashulya.memory.experiment
+    dashulya.memory.openviking_index

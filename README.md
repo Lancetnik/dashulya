@@ -23,11 +23,9 @@ point to the messages behind an answer.
 She is meant for everyday conversations across all kinds of topics. The
 personality is part of the concept: warm irony, a little cheekiness, and useful
 answers when the question is serious.
-She refers to herself using feminine grammatical forms.
 
 The name grew out of a meme in the [FastNews chat](https://t.me/fastnewsdev_chat)
-and [Ostrikov's chat](https://t.me/aostrikov_agents_chat). The platinum bob,
-mechanical neck, pink coat, and cheek heart became her Telegram face.
+and [Ostrikov's chat](https://t.me/aostrikov_agents_chat)
 
 > Hot robots in the chat 💋
 
@@ -42,15 +40,15 @@ mechanical neck, pink coat, and cheek heart became her Telegram face.
 - **Keep track of groups.** List groups the bot has observed, preserving the
   registry across restarts.
 
-With a history index connected, try questions such as:
+Try questions such as:
 
-> Where did we discuss RTK and pytest?
+> How did designers suggest moving HTML mockups into Figma?
 >
 > Who was considering reusing Osinara for a bot with custom skills?
 
-Memory currently comes from a local imported snapshot. Live history sync,
-automatic summary generation, semantic search, and web search are not
-implemented yet.
+Memory comes from a local imported snapshot. OpenViking provides semantic
+retrieval and generated summaries, with original messages preserved as evidence.
+Live history sync and web search are not implemented yet.
 
 ## Commands
 
@@ -61,11 +59,24 @@ implemented yet.
 | `/groups` | List the groups she knows about |
 | `/clear` | Reset the current private conversation |
 
-The current build responds only to the user configured as its owner. AI replies
-are available in private chats; group commands are available to the owner.
-Group mentions and replies do not start an AI conversation.
+The current build responds only to the user configured as its owner. Private
+messages, an explicit @mention of the bot, and replies to its messages start an
+AI conversation directly. Group commands remain available to the owner.
 
-Private conversation context lasts until `/clear` or a bot restart. The known-group
+In groups, messages containing “Dashulya” or “Дашуля” (including Russian case
+endings) first go through a separate AG2 decision agent using
+[OpenAI Decisions](https://docs.ag2.ai/docs/user-guide/decision_models/).
+It distinguishes an invitation to answer from a discussion about the bot. The
+classifier uses `gpt-6-luna` with the same `OPENAI_API_KEY`; `OPENAI_MODEL` selects
+the agent that writes replies. It receives the current message, its reply target,
+and up to 10 excerpts of earlier AI conversation entries in this chat/topic,
+each capped at 1,000 characters. Other group chatter is not classified or saved
+as AI conversation history. A negative decision or classifier failure sends
+nothing, including no typing indicator. Explicit mentions and replies bypass
+the classifier, even when it is unavailable.
+
+Conversation context is separate for each chat/topic and lasts until a bot
+restart; `/clear` resets the current private conversation. The known-group
 registry and the local history index persist between restarts.
 
 Formatted replies use Telegram Rich Messages for Markdown emphasis, source
@@ -83,53 +94,81 @@ remain in UTC.
 
 ## Getting started
 
-You need Python 3.12–3.14, [uv](https://docs.astral.sh/uv/), a Telegram bot token,
-and an OpenAI API key. Run these commands from the project root.
+You need Docker with Compose, a Telegram bot token, an OpenAI API key, and an
+imported memory corpus. Run commands from the project root. OpenViking is the
+agent's required memory backend.
 
-### 1. Install dependencies
-
-```sh
-uv sync --locked
-```
-
-### 2. Configure your bot
+### 1. Configure the application
 
 ```sh
 cp .env.example .env
 ```
 
-Fill in the required values in `.env`:
+Fill in these values:
 
 ```dotenv
 BOT_TOKEN=your_bot_token
 OWNER_USER_ID=your_numeric_telegram_user_id
 OPENAI_API_KEY=your_openai_api_key
+OPENVIKING_API_KEY=your_local_service_key
 ```
 
-Create a bot and get its token from [@BotFather](https://t.me/BotFather).
-`OWNER_USER_ID` is your numeric Telegram user ID, rather than your username.
-Optional model, storage, memory, and logging settings are listed in
-[.env.example](.env.example). Your `.env` stays out of Git.
+Create a bot through [@BotFather](https://t.me/BotFather). Use your numeric
+Telegram user ID for `OWNER_USER_ID`. Generate the local service key with
+`openssl rand -hex 32`. The existing local setup already has credentials.
+Your `.env` stays out of Git and the Docker build context. Model, timezone and
+host-side memory paths are listed in [.env.example](.env.example).
 
-### 3. Start chatting
+### 2. Prepare the required memory
+
+The current local setup has a completed OpenViking import of 379 messages.
+`MEMORY_PATH` and `OPENVIKING_MANIFEST` must reference its matching SQLite
+index and import manifest. Exports and indices are local files, so a fresh
+clone needs its own corpus before the agent can start.
+
+To prepare a new corpus, follow the [memory guide](docs/design/chat-memory.md)
+and [OpenViking import guide](experiments/openviking/README.md). Offline import
+commands use Python 3.12–3.14 and [uv](https://docs.astral.sh/uv/). Start only the
+memory service while importing:
 
 ```sh
-uv run dashulya
+docker compose up -d --wait openviking
 ```
 
-Open the bot you configured in Telegram and send `/start`, then a message.
-Press `Ctrl+C` in the terminal to stop it.
+The agent requires a verified import and a reachable OpenViking service.
+Startup fails explicitly when either is missing. FTS5 is available only as an
+offline comparison baseline.
 
-### Optional: connect chat history
+### 3. Start both services
 
-Ordinary AI conversation works without a history index. To enable historical
-search, point `MEMORY_PATH` at a local index and restart the bot. The default
-location is `data/memory.sqlite3`.
+```sh
+docker compose up -d --build --wait
+```
 
-History exports and indices stay local and are not included in a fresh clone.
-See the [memory setup guide](docs/design/chat-memory.md#commands) for building
-an index, and the [dataset note](docs/datasets/fastnewsdev.md) for the existing
-FastNews snapshot and its coverage.
+The agent starts after OpenViking becomes healthy, verifies the imported corpus
+and its Telegram identity, then starts polling. Docker's agent health check
+reflects this startup readiness. The agent reaches OpenViking at
+`http://openviking:1933`; host import tools use `http://127.0.0.1:1933` by default.
+
+Open the bot in Telegram and send `/start`, then a message. Inspect and stop the
+stack with:
+
+```sh
+docker compose ps
+docker compose logs -f agent
+docker compose down
+```
+
+The [Compose file](docker-compose.yaml) mounts the evidence database and manifest
+read-only. The OpenViking workspace, group registry (`data/runtime/`) and logs
+(`logs/`) persist on the host when containers are recreated. Credentials, chat
+history, logs and developer tools are excluded from the agent image.
+
+For name-based addressing in groups, [disable privacy mode](https://core.telegram.org/bots/features#privacy-mode)
+through @BotFather and re-add the bot so Telegram delivers ordinary messages.
+The owner restriction still applies. See the [dataset note](docs/datasets/fastnewsdev.md)
+for snapshot coverage and the [comparison report](docs/research/openviking-comparison.md)
+for the OpenViking pilot's results and limits.
 
 ## Development
 
@@ -139,3 +178,8 @@ or model API calls. Run `just check` locally before publishing changes.
 
 Architecture, development commands, and reference bot repositories live in
 [AGENTS.md](AGENTS.md).
+
+Dishka constructs the shared dependency graph for aiogram and AG2. The
+[dependency injection design](docs/design/dependency-injection.md) describes
+module responsibilities, scopes, resource cleanup, and provider overrides in
+tests. Domain terms are defined in [GLOSSARY.md](GLOSSARY.md).

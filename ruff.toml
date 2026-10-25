@@ -62,6 +62,8 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
+# Dishka discovers factories as provider instance methods.
+"src/dashulya/main/providers/*.py" = ["PLR6301"]
 # Existing unittest tests intentionally use unittest assertions and dynamic fixtures.
 "tests/**/*.py" = [
     "ANN", "S", "ARG001", "PLR6301", "PLC2701", "PLR0904", "PLR0914",
