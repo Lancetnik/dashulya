@@ -1,0 +1,92 @@
+# Vendored agent skills have their own formatting and examples.
+exclude: ^\.agents/
+
+repos:
+  - repo: local
+    hooks:
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+        entry: uv run --locked --no-dev --group lint trailing-whitespace-fixer
+        args: [--markdown-linebreak-ext=md]
+        language: system
+        types: [text]
+      - id: end-of-file-fixer
+        name: Fix end of files
+        entry: uv run --locked --no-dev --group lint end-of-file-fixer
+        language: system
+        types: [text]
+      - id: mixed-line-ending
+        name: Check line endings
+        entry: uv run --locked --no-dev --group lint mixed-line-ending
+        args: [--fix=no]
+        language: system
+        types: [text]
+      - id: check-case-conflict
+        name: Check case conflicts
+        entry: uv run --locked --no-dev --group lint check-case-conflict
+        language: system
+      - id: check-merge-conflict
+        name: Check merge conflicts
+        entry: uv run --locked --no-dev --group lint check-merge-conflict
+        args: [--assume-in-merge]
+        language: system
+        types: [text]
+      - id: check-toml
+        name: Check TOML
+        entry: uv run --locked --no-dev --group lint check-toml
+        language: system
+        types: [toml]
+      - id: check-yaml
+        name: Check YAML
+        entry: uv run --locked --no-dev --group lint check-yaml
+        language: system
+        types: [yaml]
+      - id: check-json
+        name: Check JSON
+        entry: uv run --locked --no-dev --group lint check-json
+        language: system
+        types: [json]
+      - id: check-added-large-files
+        name: Check large files
+        entry: uv run --locked --no-dev --group lint check-added-large-files
+        args: [--maxkb=1024, --enforce-all]
+        language: system
+        # These two selected avatar assets intentionally exceed the 1 MiB limit.
+        exclude: ^assets/avatar(-original)?\.png$
+      - id: detect-secrets
+        name: Detect secrets
+        entry: uv run --locked --no-dev --group lint detect-secrets-hook
+        args: [--no-verify]
+        language: system
+        types: [text]
+        # Generated package/artifact checksums are not credentials.
+        exclude: ^(uv\.lock|skills-lock\.json)$
+      - id: typos
+        name: Check spelling
+        entry: just typos
+        language: system
+        pass_filenames: false
+      - id: uv-lock
+        name: uv.lock is in sync
+        entry: just lock-check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+      - id: ruff
+        name: Ruff lint and formatting
+        entry: just lint
+        language: system
+        files: ^(src/|tests/|pyproject\.toml$|ruff\.toml$|justfile$)
+        pass_filenames: false
+      - id: mypy
+        name: Mypy
+        entry: just mypy
+        language: system
+        files: ^(src/|tests/|pyproject\.toml$|justfile$)
+        pass_filenames: false
+      - id: import-linter
+        name: Import Linter
+        entry: just import-linter
+        language: system
+        files: ^(src/|pyproject\.toml$|justfile$)
+        pass_filenames: false

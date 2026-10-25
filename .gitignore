@@ -1,0 +1,33 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Local chat data and runtime
+/data/
+/logs/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.session
+*.session-journal
+
+# Python environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.import_linter_cache/
+*.egg-info/
+build/
+dist/
+
+# OS and editors
+.DS_Store
+.idea/
+
+.agents

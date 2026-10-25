@@ -1,0 +1,82 @@
+# Based on FastStream's Ruff policy; scoped to Dashulya's source and tests.
+preview = true
+line-length = 90
+indent-width = 4
+target-version = "py312"
+include = ["src/**/*.py", "tests/**/*.py", "pyproject.toml"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = false
+
+[lint]
+select = ["ALL"]
+ignore = [
+    "A",
+    "FA",
+    "TD",
+    "FIX",
+    "SLOT",
+    "ARG002",
+    "ARG003",
+    "ARG004",
+    "ARG005",
+    "EXE",
+    "ASYNC109",
+    "ANN401",
+    "COM812",
+    "ISC001",
+    "TRY301",
+    "S101",
+    "SLF001",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR2004",
+    "PYI036",
+    "PYI051",
+    "G004",
+    "E501",
+    "C901",
+    "CPY",
+    "PLC2801",
+    "RUF029",
+    "N817",
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D106",
+    "D107",
+    "DOC201",
+    "DOC202",
+    "DOC402",
+    "DOC501",
+    "DOC502",
+    "FBT",
+    "BLE001",
+    "PLR0917",
+]
+
+[lint.per-file-ignores]
+# Existing unittest tests intentionally use unittest assertions and dynamic fixtures.
+"tests/**/*.py" = [
+    "ANN", "S", "ARG001", "PLR6301", "PLC2701", "PLR0904", "PLR0914",
+    "PT009", "PT027", "PT030", "PLC1901", "RUF045",
+]
+# JSON is the output of this command.
+"src/dashulya/memory/__main__.py" = ["T201"]
+
+[lint.flake8-unused-arguments]
+ignore-variadic-names = true
+
+[lint.isort]
+case-sensitive = true
+combine-as-imports = true
+
+[lint.pydocstyle]
+convention = "google"
+ignore-decorators = ["typing.overload"]

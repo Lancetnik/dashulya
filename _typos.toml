@@ -1,0 +1,13 @@
+[files]
+extend-exclude = [
+    ".git/**",
+    ".agents/**",
+    ".venv/**",
+    ".env",
+    ".env.*",
+    "!.env.example",
+    "data/**",
+    "logs/**",
+    "uv.lock",
+    "skills-lock.json",
+]

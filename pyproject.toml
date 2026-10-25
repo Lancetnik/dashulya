@@ -1,0 +1,93 @@
+[project]
+name = "dashulya"
+version = "0.1.0"
+description = "A Telegram assistant for group chats"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "ag2[openai]>=1.2.1,<2",
+    "aiogram>=3.31,<4",
+    "markdown-it-py>=4,<5",
+    "python-dotenv>=1.1,<2",
+]
+
+[project.scripts]
+dashulya = "dashulya.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.importlinter]
+root_package = "dashulya"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Application imports follow the module hierarchy"
+type = "layers"
+containers = ["dashulya"]
+layers = [
+    "__main__",
+    "main",
+    "bot",
+    "ai",
+    "memory | storage | config | observability",
+]
+exhaustive = true
+
+[[tool.importlinter.contracts]]
+name = "Telegram routing assembles handlers and middleware"
+type = "layers"
+containers = ["dashulya.bot"]
+layers = ["router", "handlers", "middlewares | formatting"]
+exhaustive = true
+
+[[tool.importlinter.contracts]]
+name = "Memory and storage are independent of Telegram and AG2"
+type = "forbidden"
+source_modules = ["dashulya.memory", "dashulya.storage"]
+forbidden_modules = ["aiogram", "ag2"]
+
+[[tool.importlinter.contracts]]
+name = "AI execution is independent of aiogram"
+type = "forbidden"
+source_modules = ["dashulya.ai"]
+forbidden_modules = ["aiogram"]
+
+[[tool.importlinter.contracts]]
+name = "Bot runtime does not depend on offline memory commands or indexing"
+type = "forbidden"
+source_modules = ["dashulya.main", "dashulya.bot", "dashulya.ai", "dashulya.storage"]
+forbidden_modules = ["dashulya.memory.__main__", "dashulya.memory.index"]
+
+[dependency-groups]
+lint = [
+    "detect-secrets==1.5.0",
+    "import-linter>=2.9,<3",
+    "mypy==1.19.1",
+    "pre-commit==4.5.1",
+    "pre-commit-hooks==6.0.0",
+    "ruff==0.14.14",
+    "typos==1.30.3",
+]
+dev = [
+    {include-group = "lint"},
+]
+
+[tool.mypy]
+files = ["src/dashulya", "tests"]
+strict = true
+python_version = "3.12"
+strict_bytes = true
+local_partial_types = true
+show_error_codes = true
+plugins = ["pydantic.mypy"]
+enable_error_code = [
+    "exhaustive-match",
+    "ignore-without-code",
+    "possibly-undefined",
+    "redundant-expr",
+    "truthy-bool",
+    "truthy-iterable",
+    "unused-awaitable",
+]
