@@ -38,7 +38,7 @@ dev = [
 ]
 
 [tool.mypy]
-files = ["src/dashulya", "tests"]
+files = ["src/dashulya", "tests", "evals/suites"]
 strict = true
 python_version = "3.12"
 strict_bytes = true

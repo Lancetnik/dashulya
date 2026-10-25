@@ -11,11 +11,12 @@ from ag2 import Agent, MemoryStream
 from ag2.events import ToolCallEvent, ToolResultEvent
 from ag2.testing import TestConfig, TrackingConfig
 
+from dashulya.domain.messages import Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.memory.index import build_memory
 from dashulya.memory.search import MemorySearch
-from tests.support import TEST_API_KEY, MemoryOverride, ModelOverrides
+from tests.support import TEST_API_KEY, MemoryOverride, ModelOverrides, reply_json
 
 
 class MemoryTests(unittest.IsolatedAsyncioTestCase):
@@ -247,7 +248,7 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
                 ToolCallEvent(
                     "search_memory", arguments=json.dumps({"query": "PostgreSQL"})
                 ),
-                "The choice was PostgreSQL: https://t.me/test_chat/2",
+                reply_json("The choice was PostgreSQL: https://t.me/test_chat/2"),
             )
         )
         container = create_container(
@@ -256,11 +257,13 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
             ModelOverrides(reply=config, decision=TestConfig("false")),
         )
         self.addAsyncCleanup(container.close)
-        agent = await container.get(Agent[str])
+        agent = await container.get(Agent[Reply])
         stream = MemoryStream()
-        reply = await agent.ask("What database did we choose?", stream=stream)
-        assert reply.body is not None
-        self.assertIn("PostgreSQL", reply.body)
+        reply = await (
+            await agent.ask("What database did we choose?", stream=stream)
+        ).content()
+        assert reply is not None
+        self.assertIn("PostgreSQL", reply.text)
         events = await stream.history.get_events()
         results = [event for event in events if isinstance(event, ToolResultEvent)]
         self.assertEqual(len(results), 1)

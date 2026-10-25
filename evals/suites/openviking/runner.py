@@ -13,7 +13,6 @@ from typing import Any
 import openviking_sdk  # type: ignore[import-untyped]
 
 from dashulya.domain.memory import MemoryBackend
-from dashulya.memory._database import _connect
 from dashulya.memory.openviking import OpenVikingMemory, index_digest
 from dashulya.memory.openviking_index import export_resources, reconcile_resources
 from dashulya.memory.search import MemorySearch
@@ -31,7 +30,9 @@ def sample_index(
     with destination.open("xb"):
         pass
     with (
-        closing(_connect(source)) as original,
+        closing(
+            sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)
+        ) as original,
         closing(sqlite3.connect(destination)) as copy,
     ):
         original.backup(copy)
@@ -194,15 +195,17 @@ async def compare(
 async def run() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--index", type=Path, default=Path("data/experiments/openviking/pilot.sqlite3")
+        "--index", type=Path, default=Path("evals/runs/openviking/pilot.sqlite3")
     )
     parser.add_argument("--url", default="http://127.0.0.1:1933")
     parser.add_argument(
-        "--export", type=Path, default=Path("data/experiments/openviking/export")
+        "--export", type=Path, default=Path("evals/runs/openviking/export")
     )
     commands = parser.add_subparsers(dest="command", required=True)
     sample = commands.add_parser("sample")
-    sample.add_argument("--source", type=Path, default=Path("data/memory.sqlite3"))
+    sample.add_argument(
+        "--source", type=Path, default=Path("evals/datasets/fastnewsdev/memory.sqlite3")
+    )
     sample.add_argument("--last", type=int, default=300)
     sample.add_argument("--around", type=int, nargs="*", default=[15100])
     export = commands.add_parser("export")
@@ -210,10 +213,12 @@ async def run() -> None:
     commands.add_parser("ingest")
     benchmark = commands.add_parser("compare")
     benchmark.add_argument(
-        "--cases", type=Path, default=Path("experiments/openviking/cases.json")
+        "--cases",
+        type=Path,
+        default=Path("evals/datasets/fastnewsdev/openviking-cases.json"),
     )
     benchmark.add_argument(
-        "--output", type=Path, default=Path("data/experiments/openviking/comparison.json")
+        "--output", type=Path, default=Path("evals/runs/openviking/comparison.json")
     )
     benchmark.add_argument("--repeats", type=int, default=3)
     args = parser.parse_args()

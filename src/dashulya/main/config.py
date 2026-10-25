@@ -14,14 +14,15 @@ class Settings:
     owner_user_id: int
     openai_model: str = "gpt-5.6-luna"
     openai_decision_model: str = "gpt-6-luna"
-    database_path: Path = Path("data/runtime/dashulya.sqlite3")
-    memory_path: Path = Path("data/experiments/openviking/pilot.sqlite3")
-    log_path: Path = Path("logs/dashulya.log")
+    database_path: Path = Path("var/agent/dashulya.sqlite3")
+    memory_path: Path = Path("var/agent/evidence.sqlite3")
+    log_path: Path = Path("var/logs/dashulya.log")
     bot_timezone: str = "Europe/Moscow"
     openviking_url: str = "http://127.0.0.1:1933"
-    openviking_manifest: Path = Path("data/experiments/openviking/export/manifest.json")
+    openviking_manifest: Path = Path("var/agent/import/manifest.json")
     openviking_api_key: str = field(default="", repr=False)
     healthcheck_path: Path | None = None
+    live_memory_path: Path = Path("var/agent/memory.sqlite3")
 
 
 def load_settings() -> Settings:
@@ -66,19 +67,19 @@ def load_settings() -> Settings:
         openai_model=os.getenv("OPENAI_MODEL", "").strip() or "gpt-5.6-luna",
         openai_decision_model=os.getenv("OPENAI_DECISION_MODEL", "").strip()
         or "gpt-6-luna",
-        database_path=Path(os.getenv("DATABASE_PATH") or "data/runtime/dashulya.sqlite3"),
-        memory_path=Path(
-            os.getenv("MEMORY_PATH") or "data/experiments/openviking/pilot.sqlite3"
-        ),
-        log_path=Path(os.getenv("LOG_PATH") or "logs/dashulya.log"),
+        database_path=Path(os.getenv("DATABASE_PATH") or "var/agent/dashulya.sqlite3"),
+        memory_path=Path(os.getenv("MEMORY_PATH") or "var/agent/evidence.sqlite3"),
+        log_path=Path(os.getenv("LOG_PATH") or "var/logs/dashulya.log"),
         bot_timezone=bot_timezone,
         openviking_url=os.getenv("OPENVIKING_URL", "").strip() or "http://127.0.0.1:1933",
         openviking_manifest=Path(
-            os.getenv("OPENVIKING_MANIFEST")
-            or "data/experiments/openviking/export/manifest.json"
+            os.getenv("OPENVIKING_MANIFEST") or "var/agent/import/manifest.json"
         ),
         openviking_api_key=os.getenv("OPENVIKING_API_KEY", "").strip(),
         healthcheck_path=Path(value)
         if (value := os.getenv("HEALTHCHECK_PATH"))
         else None,
+        live_memory_path=Path(
+            os.getenv("LIVE_MEMORY_PATH") or "var/agent/memory.sqlite3"
+        ),
     )

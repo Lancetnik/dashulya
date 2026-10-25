@@ -12,7 +12,13 @@ from dashulya.domain.groups import Group, GroupRegistry
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.storage.groups import GroupStore
-from tests.support import TEST_API_KEY, BotOverride, DecisionOverride, DialogueOverride
+from tests.support import (
+    TEST_API_KEY,
+    BotOverride,
+    DecisionOverride,
+    DialogueOverride,
+    RecorderOverride,
+)
 
 BOT_TOKEN = "123456789:TEST_ONLY_NOT_A_REAL_BOT_TOKEN"
 BOT_USER: dict[str, Any] = {"id": 123456789, "is_bot": True, "first_name": "Dashulya"}
@@ -48,6 +54,7 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
                 database_path=Path(self.directory.name) / "groups.sqlite3",
             ),
             BotOverride(self.bot),
+            RecorderOverride(),
             DialogueOverride(AsyncMock()),
             DecisionOverride(decision),
         )
@@ -216,7 +223,8 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_polling_subscribes_to_membership_updates(self) -> None:
         self.assertEqual(
-            self.dispatcher.resolve_used_update_types(), ["message", "my_chat_member"]
+            self.dispatcher.resolve_used_update_types(),
+            ["edited_message", "message", "my_chat_member"],
         )
 
 

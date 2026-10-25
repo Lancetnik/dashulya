@@ -1,9 +1,9 @@
-# Based on FastStream's Ruff policy; scoped to Dashulya's source and tests.
+# Based on FastStream's Ruff policy; scoped to source, tests and evaluation suites.
 preview = true
 line-length = 90
 indent-width = 4
 target-version = "py312"
-include = ["src/**/*.py", "tests/**/*.py", "pyproject.toml"]
+include = ["src/**/*.py", "tests/**/*.py", "evals/suites/**/*.py", "pyproject.toml"]
 
 [format]
 quote-style = "double"
@@ -73,6 +73,7 @@ ignore = [
 "src/dashulya/main/providers/telegram.py" = ["ASYNC119"]
 # These error boundaries cover complete CLI and remote-memory operations.
 "src/dashulya/memory/openviking.py" = ["PLW0717"]
+"src/dashulya/memory/ingestion.py" = ["PLW0717"]
 # JSON is the output of this command.
 "src/dashulya/memory/__main__.py" = ["T201", "PLW0717"]
 

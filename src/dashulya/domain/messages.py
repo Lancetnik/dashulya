@@ -5,6 +5,12 @@ ConversationKey = tuple[int, int | None]
 
 
 @dataclass(frozen=True)
+class Reply:
+    text: str
+    reply_to_message_id: int | None = None
+
+
+@dataclass(frozen=True)
 class GroupMessage:
     message_id: int
     text: str

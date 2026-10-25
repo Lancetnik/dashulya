@@ -35,6 +35,8 @@ and [Ostrikov's chat](https://t.me/aostrikov_agents_chat)
   start whenever you send `/clear`.
 - **Find earlier discussions.** Search an imported chat-history snapshot and
   return original messages with Telegram links and surrounding replies.
+- **Remember new group messages.** Save received messages and edits locally,
+  then index them in OpenViking for recall through the same memory tool.
 - **Follow memories back to their sources.** Search original messages,
   discussion extracts, and source-backed summaries or facts through one tool.
 - **Keep track of groups.** List groups the bot has observed, preserving the
@@ -46,9 +48,11 @@ Try questions such as:
 >
 > Who was considering reusing Osinara for a bot with custom skills?
 
-Memory comes from a local imported snapshot. OpenViking provides semantic
-retrieval and generated summaries, with original messages preserved as evidence.
-Live history sync and web search are not implemented yet.
+Memory combines an imported snapshot with new group messages received while the
+bot is running. OpenViking provides semantic retrieval and generated summaries,
+with original messages preserved locally as evidence. Pending messages are
+indexed in the background; retries survive container restarts. Historical
+backfill, deletion synchronization and web search are not implemented.
 
 ## Commands
 
@@ -69,15 +73,26 @@ endings) first go through a separate AG2 decision agent using
 It distinguishes an invitation to answer from a discussion about the bot. The
 classifier uses `gpt-6-luna` with the same `OPENAI_API_KEY`; `OPENAI_MODEL` selects
 the agent that writes replies. It receives the current message, its reply target,
-and up to 10 excerpts of earlier AI conversation entries in this chat/topic,
-each capped at 1,000 characters. Other group chatter is not classified or saved
-as AI conversation history. A negative decision or classifier failure sends
+and the observed group context described below. Other group chatter does not
+start a model turn. A negative decision or classifier failure sends
 nothing, including no typing indicator. Explicit mentions and replies bypass
 the classifier, even when it is unavailable.
 
-Conversation context is separate for each chat/topic and lasts until a bot
-restart; `/clear` resets the current private conversation. The known-group
-registry and the local history index persist between restarts.
+Each group reply uses a fresh model stream with the latest 20 observed messages
+in that chat/topic, including the current request, plus their reply parents up
+to five hops. Messages appear once in chronological message order; this bot's
+previously delivered replies use the assistant role. Context reads local originals
+immediately, without waiting for semantic indexing. Missing parents and media
+contents cannot be reconstructed. The selection has at most 120 messages, with
+no additional token cap. See [the decision](docs/adr/0002-rebuild-group-reply-context.md).
+
+The agent returns structured reply text and an optional target message ID. It
+can reply to another message in the supplied group context; null or an ID outside
+that selection defaults to the triggering message. Every chunk uses the same
+target. Only the reply text is sent to Telegram.
+
+Private conversation history lasts until a bot restart or `/clear`. The
+known-group registry and group-message journal persist between restarts.
 
 Formatted replies use Telegram Rich Messages for Markdown emphasis, source
 links, headings, lists, tables, quotes, code, and collapsible `<details>` sections.
@@ -127,7 +142,7 @@ index and import manifest. Exports and indices are local files, so a fresh
 clone needs its own corpus before the agent can start.
 
 To prepare a new corpus, follow the [memory guide](docs/design/chat-memory.md)
-and [OpenViking import guide](experiments/openviking/README.md). Offline import
+and [OpenViking import guide](evals/suites/openviking/README.md). Offline import
 commands use Python 3.12–3.14 and [uv](https://docs.astral.sh/uv/). Start only the
 memory service while importing:
 
@@ -160,15 +175,21 @@ docker compose down
 ```
 
 The [Compose file](docker-compose.yaml) mounts the evidence database and manifest
-read-only. The OpenViking workspace, group registry (`data/runtime/`) and logs
-(`logs/`) persist on the host when containers are recreated. Credentials, chat
-history, logs and developer tools are excluded from the agent image.
+read-only. Active evidence, the group registry and live messages persist under
+`var/agent/`; OpenViking uses `var/openviking/`, and logs use `var/logs/`. These
+local files survive container recreation and are excluded from Git. Credentials,
+chat history, logs and developer tools are excluded from the agent image.
 
-For name-based addressing in groups, [disable privacy mode](https://core.telegram.org/bots/features#privacy-mode)
-through @BotFather and re-add the bot so Telegram delivers ordinary messages.
-The owner restriction still applies. See the [dataset note](docs/datasets/fastnewsdev.md)
-for snapshot coverage and the [comparison report](docs/research/openviking-comparison.md)
-for the OpenViking pilot's results and limits.
+For recording ordinary group messages and name-based addressing, make the bot
+an administrator, or
+[disable privacy mode](https://core.telegram.org/bots/features#privacy-mode)
+through @BotFather and re-add the bot. Telegram does not deliver other bots'
+messages to it. All received group participants' messages are indexed; replies and commands
+remain restricted to the owner. Private conversations are not added to chat
+memory. Text, captions and basic attachment metadata are retained; attachment
+contents are not downloaded. Coverage and provenance belong to each local
+dataset under `evals/datasets/`. The [memory ADR](docs/adr/0001-openviking-memory.md)
+records the pilot's decision and limitations.
 
 ## Development
 
@@ -177,7 +198,10 @@ Tests and package builds run on Python 3.12, 3.13, and 3.14 without live Telegra
 or model API calls. Run `just check` locally before publishing changes.
 
 Architecture, development commands, and reference bot repositories live in
-[AGENTS.md](AGENTS.md).
+[AGENTS.md](AGENTS.md). The [repository layout](docs/design/repository-layout.md)
+separates design documents, evaluation infrastructure and local application state.
+PRDs live in GitHub Issues; datasets, evaluation results and research drafts are
+local files excluded from Git. See [evals/](evals/README.md) for evaluation setup.
 
 Dishka constructs the shared dependency graph for aiogram and AG2. The
 [dependency injection design](docs/design/dependency-injection.md) describes

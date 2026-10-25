@@ -21,7 +21,7 @@ class SettingsTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             self.assertEqual(
                 load_settings().memory_path,
-                Path("data/experiments/openviking/pilot.sqlite3"),
+                Path("var/agent/evidence.sqlite3"),
             )
             os.environ.update({
                 "OPENVIKING_API_KEY": "test-secret",  # pragma: allowlist secret -- Fake credential.
@@ -56,7 +56,7 @@ class SettingsTests(unittest.TestCase):
             settings = load_settings()
             self.assertEqual(settings.openai_model, "gpt-5.6-luna")
             self.assertEqual(settings.openai_api_key, "test-key")
-            self.assertEqual(settings.log_path, Path("logs/dashulya.log"))
+            self.assertEqual(settings.log_path, Path("var/logs/dashulya.log"))
             os.environ["LOG_PATH"] = "custom/bot.log"
             self.assertEqual(load_settings().log_path, Path("custom/bot.log"))
             os.environ["OPENAI_MODEL"] = "custom-model"

@@ -12,7 +12,9 @@ from dashulya.memory.search import MemorySearch
 
 async def run() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--index", type=Path, default=Path("data/memory.sqlite3"))
+    parser.add_argument(
+        "--index", type=Path, default=Path("evals/datasets/fastnewsdev/memory.sqlite3")
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     build = commands.add_parser(
         "build", help="Build a new index from a slop-writer snapshot."

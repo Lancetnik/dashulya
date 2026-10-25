@@ -12,6 +12,7 @@ from dashulya.ai.prompts import (
     MEMORY_TOOLS_PROMPT,
     RESPONSE_RULES_PROMPT,
 )
+from dashulya.domain.messages import Reply
 
 
 def create_decision_agent(
@@ -34,7 +35,7 @@ def create_reply_agent(
     *,
     tools: Iterable[Tool],
     middleware: Iterable[MiddlewareFactory] = (),
-) -> Agent[str]:
+) -> Agent[Reply]:
     return Agent(
         "dashulya",
         prompt=[
@@ -45,5 +46,9 @@ def create_reply_agent(
         ],
         tools=tools,
         config=config,
+        response_schema=ResponseSchema(
+            Reply,
+            description="Reply text and an optional Telegram message ID from the current reply context.",
+        ),
         middleware=middleware,
     )

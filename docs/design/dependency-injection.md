@@ -23,13 +23,13 @@ ai/
     models.py            Reply/classification model policy
     factory.py           Agent identities, prompts, schemas, and construction
   tools/memory.py        Memory tool behavior over the async backend interface
-  dialogue.py            Conversation history, turn locking, and reset
+  dialogue.py            Reply context, conversation history, turn locking, and reset
   addressing.py          Direct-address recognition and classification
   prompts.py             Persona and response instructions
 domain/
   groups.py              Group, GroupRepository, and GroupRegistry
-  messages.py            GroupMessage and ConversationKey
-  memory.py              MemoryBackend interface
+  messages.py            GroupMessage, Reply and ConversationKey
+  memory.py              MemoryBackend, MemoryMessage, MessageRecorder and ChatHistory
 ```
 
 `domain` has no application or infrastructure imports. `GroupRegistry` owns
@@ -43,12 +43,30 @@ loads SQLite metadata with `await MemorySearch.open(path)`. The tool awaits
 the backend directly and owns no thread scheduling. Indexing and reviewed
 maintenance writes retain synchronous SQLite access in the offline commands.
 
+`LiveMemory` implements `MessageRecorder` with an asynchronous SQLite write and
+a persisted revision queue. The application-scoped `MemoryProvider` initializes
+it, supplies the same instance to capture and recall, and starts `MemoryIngestion`
+after OpenViking readiness checks. Its async generator cancels and joins the
+worker at shutdown; pending rows survive. Capture waits only for local
+persistence, while the worker owns remote indexing and retries.
+The same instance implements `ChatHistory` for direct recent-message and bounded
+reply-parent selection, independent of indexing readiness. `AgentProvider`
+supplies it and the Telegram bot ID to `Dialogue`. Telegram input and outgoing
+session middleware share the message conversion in `bot/messages.py`; successful
+group deliveries, including command responses, are recorded with Telegram-assigned
+IDs. `TelegramProvider` attaches outgoing capture to the shared bot session.
+
 AI factories accept ordinary arguments; tools declare injected dependencies
 with `FromDishka` and the AG2 integration's `@inject`. Model choices, timeouts,
 retry policy, agent identities, prompts, and response schemas live in `ai`.
 Providers adapt validated application settings to those inputs, attach DI
 middleware, and supply dependencies. `OPENAI_MODEL` selects the reply model;
 `OPENAI_DECISION_MODEL` selects the addressing model.
+
+The reply agent has an AG2 `ResponseSchema[Reply]` for `text` and nullable
+`reply_to_message_id`. `Dialogue` validates the parsed target against the same
+group-context snapshot that seeded the stream; private replies retain the default
+target. The result crosses into `bot` as the domain's `Reply`, with no AG2 objects.
 
 `ReplyDelivery` remains in `bot`: it owns Telegram typing, redacted failure
 handling, and rich/text delivery. Only an explicit Telegram rejection permits
@@ -70,13 +88,14 @@ be registered unchanged in this graph. Telegram handlers use
 `dishka.integrations.aiogram.inject` and `FromDishka` explicitly. Polling and
 direct `Dispatcher.feed_update` calls use the same graph without an extra
 startup injection step. Middleware receives its dependencies through
-constructors. Group tracking runs before owner access.
+constructors. Group tracking and live-message capture run before owner access.
+Edited-message updates go directly to capture without dialogue execution.
 
 Both AG2 agents carry `DishkaAsyncMiddleware`. Each `Agent.ask()` opens a
 `SESSION`; injected tools open their own `REQUEST` beneath that session.
 These scopes are separate from the Telegram event. Agents retain the application
 container rather than the event container, so an AG2 turn opens its session
-without inheriting a Telegram request's lifetime. `Agent[str]` and `Agent[bool]`
+without inheriting a Telegram request's lifetime. `Agent[Reply]` and `Agent[bool]`
 distinguish the reply and addressing roles.
 
 `ai/tools/memory.py` registers the memory tool with `@tool` and the standard
@@ -88,9 +107,14 @@ health and remote corpus before agent construction. No runtime FTS5 or
 no-memory mode is registered.
 
 `Dialogue` owns chat/topic isolation, original send-time formatting, reply
-deadlines, and serialization with `/clear`. Conversation streams and locks stay
-together across Telegram events; they are not request dependencies. AG2's
-explicit conversation scope is not needed here.
+deadlines, and serialization with `/clear`. Private streams and conversation
+locks stay together across Telegram events; group streams are rebuilt per
+request under [the reply-context ADR](../adr/0002-rebuild-group-reply-context.md).
+The delivery boundary holds a conversation's delivery lock through generation,
+Telegram sending and local recording; the model lock also protects direct
+dialogue calls and private history reads. `/clear` acquires both in that order.
+These are not request dependencies. AG2's explicit conversation scope is not
+needed here.
 
 `main.run` closes the container in `finally`, including polling failures,
 cancellation, and partial startup failures. The bot session and group database

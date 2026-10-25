@@ -6,8 +6,10 @@ extend-exclude = [
     ".env",
     ".env.*",
     "!.env.example",
-    "data/**",
-    "logs/**",
+    "evals/datasets/**",
+    "evals/runs/**",
+    "var/**",
+    ".scratch/**",
     "uv.lock",
     "skills-lock.json",
 ]

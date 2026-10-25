@@ -14,24 +14,25 @@ services:
       DATABASE_PATH: /var/lib/dashulya/dashulya.sqlite3
       LOG_PATH: /var/log/dashulya/dashulya.log
       MEMORY_PATH: /memory/evidence.sqlite3
+      LIVE_MEMORY_PATH: /var/lib/dashulya/memory.sqlite3
       OPENVIKING_MANIFEST: /memory/manifest.json
       OPENVIKING_URL: http://openviking:1933
       OPENVIKING_API_KEY: ${OPENVIKING_API_KEY:?Set OPENVIKING_API_KEY in .env}
     volumes:
       - type: bind
-        source: ${MEMORY_PATH:-./data/experiments/openviking/pilot.sqlite3}
+        source: ${MEMORY_PATH:-./var/agent/evidence.sqlite3}
         target: /memory/evidence.sqlite3
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${OPENVIKING_MANIFEST:-./data/experiments/openviking/export/manifest.json}
+        source: ${OPENVIKING_MANIFEST:-./var/agent/import/manifest.json}
         target: /memory/manifest.json
         read_only: true
         bind:
           create_host_path: false
-      - ./data/runtime:/var/lib/dashulya
-      - ./logs:/var/log/dashulya
+      - ./var/agent:/var/lib/dashulya
+      - ./var/logs:/var/log/dashulya
 
   openviking:
     image: ghcr.io/volcengine/openviking:v0.5.2
@@ -44,8 +45,8 @@ services:
     ports:
       - "127.0.0.1:${OPENVIKING_PORT:-1933}:1933"
     volumes:
-      - ./experiments/openviking/ov.docker.conf:/etc/openviking/ov.conf:ro
-      - ./data/experiments/openviking/workspace:/var/lib/openviking
+      - ./deploy/openviking.conf:/etc/openviking/ov.conf:ro
+      - ./var/openviking:/var/lib/openviking
     healthcheck:
       test:
         - CMD

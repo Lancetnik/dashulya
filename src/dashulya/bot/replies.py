@@ -24,6 +24,12 @@ class ReplyDelivery:
         *,
         group_context: dict[str, object] | None = None,
     ) -> None:
+        async with self._dialogue.delivery((message.chat.id, message.message_thread_id)):
+            await self._reply(message, group_context=group_context)
+
+    async def _reply(
+        self, message: Message, *, group_context: dict[str, object] | None
+    ) -> None:
         # The router accepts only text messages with a sender.
         assert message.text is not None
         assert message.from_user is not None
@@ -33,13 +39,14 @@ class ReplyDelivery:
             "message_id": message.message_id,
         }
         logger.info("AI request started", extra=context)
+        reply_to_message_id = message.message_id
         async with ChatActionSender.typing(
             bot=self._bot,
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
         ):
             try:
-                text = await self._dialogue.reply(
+                reply = await self._dialogue.reply(
                     (message.chat.id, message.message_thread_id),
                     message.text,
                     user_id=message.from_user.id,
@@ -47,6 +54,8 @@ class ReplyDelivery:
                     sent_at=message.date,
                     group_context=group_context,
                 )
+                text = reply.text
+                reply_to_message_id = reply.reply_to_message_id or message.message_id
                 logger.info(
                     "AI reply generated",
                     extra={
@@ -68,7 +77,7 @@ class ReplyDelivery:
                     "I couldn't get an AI reply right now. Please try again in a moment."
                 )
         reply_parameters = ReplyParameters(
-            message_id=message.message_id, allow_sending_without_reply=True
+            message_id=reply_to_message_id, allow_sending_without_reply=True
         )
         rich = rich_message(text)
         if rich is not None:

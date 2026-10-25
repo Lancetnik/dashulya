@@ -8,6 +8,7 @@ from typing import Any
 import openviking_sdk  # type: ignore[import-untyped]
 
 from dashulya.memory._database import _read_connection
+from dashulya.memory.live import BLOCK_SIZE, LiveMemory
 from dashulya.memory.search import MemorySearch, validate_search
 
 
@@ -26,10 +27,12 @@ class OpenVikingMemory:
         *,
         url: str,
         api_key: str = "",
+        live: LiveMemory | None = None,
     ) -> None:
         self.evidence = evidence
         self.url = url.rstrip("/")
         self.api_key = api_key
+        self.live = live
         data = json.loads(manifest.read_text(encoding="utf-8"))
         if data["version"] != 1 or data["index_sha256"] != index_digest(evidence.path):
             error_message = (
@@ -78,18 +81,25 @@ class OpenVikingMemory:
         limit: int = 3,
     ) -> dict[str, Any]:
         _, after, before = validate_search(query, memory_id, after, before, limit)
+        coverage = dict(self.evidence.coverage)
+        if self.live is not None:
+            coverage["live"] = await self.live.coverage()
         if memory_id:
-            return await self.evidence.search(
-                query,
-                memory_id=memory_id,
-                author_id=author_id,
-                after=after,
-                before=before,
-                limit=limit,
-            )
+            return {
+                "coverage": coverage,
+                "hits": await self._expand(memory_id, author_id, after, before),
+            }
         eligible = await self._eligible(author_id, after, before)
-        uris = [uri for uri, key in self.records.items() if key in eligible]
-        result: dict[str, Any] = {"coverage": self.evidence.coverage, "hits": []}
+        records = {uri: key for uri, key in self.records.items() if key in eligible}
+        if self.live is not None:
+            records.update(await self.live.eligible(author_id, after, before))
+        # OpenViking can return summary sidecar URIs instead of their directory URI.
+        for uri, mapped_key in list(records.items()):
+            if not uri.endswith(".md"):
+                records[f"{uri}/.abstract.md"] = mapped_key
+                records[f"{uri}/.overview.md"] = mapped_key
+        uris = list(records)
+        result: dict[str, Any] = {"coverage": coverage, "hits": []}
         if not uris:
             return result
         try:
@@ -105,7 +115,9 @@ class OpenVikingMemory:
                 candidates = (
                     await client.find(
                         query,
-                        target_uri=self.root,
+                        target_uri=[self.root, self.live.root]
+                        if self.live is not None
+                        else self.root,
                         limit=100,
                         options={
                             "filter": {
@@ -133,20 +145,13 @@ class OpenVikingMemory:
             raise RuntimeError(error_message) from None
         seen: set[str] = set()
         for candidate in candidates:
-            key = self.records.get(candidate["uri"].rstrip("/"))
-            if key not in eligible or key is None:
+            key = records.get(candidate["uri"].rstrip("/"))
+            if key is None:
                 continue
-            conversation = self.conversations[key]
+            conversation = self._conversation(key)
             if conversation in seen:
                 continue
-            expanded = (
-                await self.evidence.search(
-                    memory_id=key,
-                    author_id=author_id,
-                    after=after,
-                    before=before,
-                )
-            )["hits"]
+            expanded = await self._expand(key, author_id, after, before)
             if not expanded:
                 continue
             seen.add(conversation)
@@ -154,6 +159,24 @@ class OpenVikingMemory:
             if len(result["hits"]) == limit:
                 break
         return result
+
+    def _conversation(self, key: str) -> str:
+        if key.startswith(("telegram:", "telegram-block:")):
+            prefix, chat_id, number = key.split(":")
+            block = int(number) // BLOCK_SIZE if prefix == "telegram" else int(number)
+            return f"telegram-block:{chat_id}:{block}"
+        return self.conversations[key]
+
+    async def _expand(
+        self, key: str, author: int | None, after: str | None, before: str | None
+    ) -> list[dict[str, Any]]:
+        if self.live is not None and key.startswith(("telegram:", "telegram-block:")):
+            return await self.live.expand(key, author, after, before)
+        result = await self.evidence.search(
+            memory_id=key, author_id=author, after=after, before=before
+        )
+        hits: list[dict[str, Any]] = result["hits"]
+        return hits
 
     async def _eligible(
         self, author: int | None, after: str | None, before: str | None

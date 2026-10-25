@@ -21,10 +21,17 @@ from dishka_ag2 import AG2Scope, FromDishka, inject
 from dashulya.ai.agents.models import AgentModels
 from dashulya.ai.dialogue import Dialogue
 from dashulya.domain.memory import MemoryBackend
+from dashulya.domain.messages import Reply
 from dashulya.main import create_container, run
 from dashulya.main.config import Settings
 from dashulya.storage.groups import GroupStore
-from tests.support import TEST_API_KEY, MemoryOverride, ModelOverrides
+from tests.support import (
+    TEST_API_KEY,
+    MemoryOverride,
+    ModelOverrides,
+    RecorderOverride,
+    reply_json,
+)
 
 
 @dataclass
@@ -107,6 +114,7 @@ class DependencyTests(unittest.IsolatedAsyncioTestCase):
             owner_user_id=42,
             database_path=Path(self.directory.name) / "groups.sqlite3",
             memory_path=Path(self.directory.name) / "missing.sqlite3",
+            live_memory_path=Path(self.directory.name) / "live.sqlite3",
         )
 
     async def test_agents_and_dialogue_are_shared_but_agent_roles_are_distinct(
@@ -116,31 +124,34 @@ class DependencyTests(unittest.IsolatedAsyncioTestCase):
             self.settings,
             MemoryOverride(),
             ModelOverrides(
-                reply=TestConfig("Hello"), decision=TestConfig('{"data":true}')
+                reply=TestConfig(reply_json("Hello")),
+                decision=TestConfig('{"data":true}'),
             ),
         )
         self.addAsyncCleanup(container.close)
-        reply = await container.get(Agent[str])
+        reply = await container.get(Agent[Reply])
         decision = await container.get(Agent[bool])
         dialogue = await container.get(Dialogue)
         self.assertIsNot(reply, decision)
         for _ in range(2):
             async with container() as event:
                 self.assertIs(event.scope, AG2Scope.REQUEST)
-                self.assertIs(await event.get(Agent[str]), reply)
+                self.assertIs(await event.get(Agent[Reply]), reply)
                 self.assertIs(await event.get(Agent[bool]), decision)
                 self.assertIs(await event.get(Dialogue), dialogue)
         memory = await container.get(MemoryBackend)
         async with container() as event:
             self.assertIs(await event.get(MemoryBackend), memory)
         self.assertEqual([tool.name for tool in reply.tools], ["search_memory"])
-        self.assertEqual((await reply.ask("Hello")).body, "Hello")
+        self.assertEqual(await (await reply.ask("Hello")).content(), Reply("Hello"))
         self.assertTrue(await (await decision.ask("Addressed?")).content())
 
     async def test_feed_update_injects_event_context_and_finalizes_each_request(
         self,
     ) -> None:
-        container = create_container(self.settings, ScopeProvider(), MemoryOverride())
+        container = create_container(
+            self.settings, ScopeProvider(), MemoryOverride(), RecorderOverride()
+        )
         self.addAsyncCleanup(container.close)
         dispatcher = await container.get(Dispatcher)
         bot = await container.get(Bot)
@@ -191,13 +202,13 @@ class DependencyTests(unittest.IsolatedAsyncioTestCase):
                 reply=TestConfig(
                     ToolCallEvent("inspect_scope", arguments="{}"),
                     ToolCallEvent("inspect_scope", arguments="{}"),
-                    "Done",
+                    reply_json("Done"),
                 ),
                 decision=TestConfig("false"),
             ),
         )
         self.addAsyncCleanup(container.close)
-        agent = await container.get(Agent[str])
+        agent = await container.get(Agent[Reply])
         await asyncio.gather(
             agent.ask("First", tools=[inspect_scope]),
             agent.ask("Second", tools=[inspect_scope]),
@@ -216,13 +227,14 @@ class DependencyTests(unittest.IsolatedAsyncioTestCase):
             MemoryOverride(),
             ModelOverrides(
                 reply=TestConfig(
-                    ToolCallEvent("inspect_scope", arguments='{"block":true}'), "Done"
+                    ToolCallEvent("inspect_scope", arguments='{"block":true}'),
+                    reply_json("Done"),
                 ),
                 decision=TestConfig("false"),
             ),
         )
         self.addAsyncCleanup(container.close)
-        agent = await container.get(Agent[str])
+        agent = await container.get(Agent[Reply])
         trace = await container.get(ScopeTrace)
         task = asyncio.create_task(agent.ask("Wait", tools=[inspect_scope]))
         try:
@@ -239,7 +251,9 @@ class DependencyTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         for failure in (None, RuntimeError("Polling failed"), asyncio.CancelledError()):
             with self.subTest(failure=failure):
-                container = create_container(self.settings, MemoryOverride())
+                container = create_container(
+                    self.settings, MemoryOverride(), RecorderOverride()
+                )
                 bot = await container.get(Bot)
                 groups = await container.get(GroupStore)
                 close = AsyncMock(wraps=bot.session.close)
@@ -264,7 +278,7 @@ class DependencyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_partial_startup_failure_closes_the_bot_session(self) -> None:
         settings = replace(self.settings, database_path=Path(self.directory.name))
-        container = create_container(settings, MemoryOverride())
+        container = create_container(settings, MemoryOverride(), RecorderOverride())
         bot = await container.get(Bot)
         close = AsyncMock(wraps=bot.session.close)
         with (
@@ -294,7 +308,7 @@ class DependencyTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         marker = Path(self.directory.name) / "ready"
         settings = replace(self.settings, healthcheck_path=marker)
-        container = create_container(settings, MemoryOverride())
+        container = create_container(settings, MemoryOverride(), RecorderOverride())
         bot = await container.get(Bot)
 
         async def poll(*args: object, **kwargs: object) -> None:

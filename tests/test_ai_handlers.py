@@ -1,22 +1,30 @@
 import json
 import unittest
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from ag2 import Agent
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.methods import SendMessage, SendRichMessage, TelegramMethod
-from aiogram.types import Update, User
+from aiogram.types import Message, Update, User
 
 from dashulya.bot.formatting import text_chunks
+from dashulya.domain.messages import Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.storage.groups import GroupStore
-from tests.support import TEST_API_KEY, BotOverride, DecisionOverride, DialogueOverride
+from tests.support import (
+    TEST_API_KEY,
+    BotOverride,
+    DecisionOverride,
+    DialogueOverride,
+    RecorderOverride,
+)
 
 BOT_TOKEN = "123456789:TEST_ONLY_NOT_A_REAL_BOT_TOKEN"
 BOT_USER: dict[str, Any] = {"id": 123456789, "is_bot": True, "first_name": "Dashulya"}
@@ -38,12 +46,14 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
         me_patch.start()
         self.addCleanup(me_patch.stop)
-        self.requests = AsyncMock(return_value=True)
+        self.sent_id = 1000
+        self.requests = AsyncMock(side_effect=self.request)
         request_patch = patch.object(self.bot.session, "make_request", self.requests)
         request_patch.start()
         self.addCleanup(request_patch.stop)
         self.dialogue = AsyncMock()
-        self.dialogue.reply.return_value = "Hello <Anna> 💋"
+        self.dialogue.delivery = MagicMock(return_value=nullcontext())
+        self.dialogue.reply.return_value = Reply("Hello <Anna> 💋")
         self.dialogue.recent_context.return_value = []
         self.decision_agent = AsyncMock(spec=Agent)
         self.decision_agent.ask.return_value.content = AsyncMock(return_value=False)
@@ -55,6 +65,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
                 database_path=Path(self.directory.name) / "groups.sqlite3",
             ),
             BotOverride(self.bot),
+            RecorderOverride(),
             DialogueOverride(self.dialogue),
             DecisionOverride(self.decision_agent),
         )
@@ -62,6 +73,20 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.groups = await self.container.get(GroupStore)
         self.dispatcher = await self.container.get(Dispatcher)
         self.update_id = 0
+
+    async def request(
+        self, bot: Bot, method: TelegramMethod[Any], **kwargs: Any
+    ) -> Message | bool:
+        if isinstance(method, (SendMessage, SendRichMessage)):
+            self.sent_id += 1
+            return Message.model_validate({
+                "message_id": self.sent_id,
+                "date": 1700000000,
+                "chat": GROUP if method.chat_id == GROUP["id"] else PRIVATE,
+                "from": BOT_USER,
+                "text": method.text if isinstance(method, SendMessage) else None,
+            })
+        return True
 
     async def message(
         self,
@@ -124,13 +149,15 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         link_label = "Обсуждение"
-        self.dialogue.reply.return_value = (
+        self.dialogue.reply.return_value = Reply(
             "Вчера обсуждали **Codex и Claude** 😄\n"
             f"[{link_label}](https://t.me/fastnewsdev_chat/19008)"
         )
         await self.message("Что обсуждали?")
         reply = self.rich_replies()[-1]
-        self.assertEqual(reply.rich_message.markdown, self.dialogue.reply.return_value)
+        self.assertEqual(
+            reply.rich_message.markdown, self.dialogue.reply.return_value.text
+        )
         self.assertEqual(reply.chat_id, PRIVATE["id"])
         assert reply.reply_parameters is not None
         self.assertEqual(reply.reply_parameters.message_id, 1)
@@ -138,7 +165,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_native_tables_and_collapsible_details_are_preserved(self) -> None:
         text = "## Models\n\n| Model | Cost |\n| --- | --- |\n| Luna | Low |\n\n<details><summary>Details</summary>\n\n**More information**\n\n</details>"
-        self.dialogue.reply.return_value = text
+        self.dialogue.reply.return_value = Reply(text)
         await self.message("Compare models")
         self.assertEqual(len(self.rich_replies()), 1)
         self.assertEqual(self.rich_replies()[0].rich_message.markdown, text)
@@ -150,7 +177,9 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
             return True
 
         self.requests.side_effect = request
-        self.dialogue.reply.return_value = "**Codex** [source](https://example.com)"
+        self.dialogue.reply.return_value = Reply(
+            "**Codex** [source](https://example.com)"
+        )
         with self.assertLogs("dashulya.bot.replies", level="WARNING"):
             await self.message("Hi")
         self.assertEqual(len(self.rich_replies()), 1)
@@ -167,7 +196,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
             return True
 
         self.requests.side_effect = request
-        self.dialogue.reply.return_value = "**Codex**"
+        self.dialogue.reply.return_value = Reply("**Codex**")
         with self.assertRaises(TelegramNetworkError):
             await self.message("Hi")
         self.assertEqual(len(self.rich_replies()), 1)
@@ -175,7 +204,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_oversized_rich_answer_keeps_formatting_in_text_chunks(self) -> None:
         text = "a" * 33000
-        self.dialogue.reply.return_value = f"**{text}**"
+        self.dialogue.reply.return_value = Reply(f"**{text}**")
         await self.message("Long answer")
         self.assertEqual(self.rich_replies(), [])
         self.assertEqual("".join(reply.text for reply in self.replies()), text)
@@ -410,7 +439,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_long_responses_are_split_losslessly(self) -> None:
         text = "a" * 3999 + "💋" * 3000 + "<plain text>"
-        self.dialogue.reply.return_value = text
+        self.dialogue.reply.return_value = Reply(text)
         await self.message("Long answer please")
         chunks = [reply.text for reply in self.replies()]
         self.assertEqual("".join(chunks), text)

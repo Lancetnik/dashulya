@@ -4,6 +4,7 @@ import sqlite3
 import unittest
 from contextlib import closing
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -11,14 +12,15 @@ from unittest.mock import patch
 
 import httpx
 
-from dashulya.domain.memory import MemoryBackend
+from dashulya.domain.memory import MemoryBackend, MemoryMessage
 from dashulya.main import create_container
 from dashulya.main.config import Settings
-from dashulya.memory.experiment import compare, ingest_export, sample_index
 from dashulya.memory.index import build_memory
+from dashulya.memory.live import LiveMemory
 from dashulya.memory.openviking import OpenVikingMemory
 from dashulya.memory.openviking_index import export_resources, reconcile_resources
 from dashulya.memory.search import MemorySearch
+from evals.suites.openviking.runner import compare, ingest_export, sample_index
 from tests.support import TEST_API_KEY
 
 
@@ -102,7 +104,9 @@ class OpenVikingTests(unittest.IsolatedAsyncioTestCase):
             if value == key and uri.endswith(".md") != directory
         )
 
-    def backend(self, *, status: int = 200) -> OpenVikingMemory:
+    def backend(
+        self, *, status: int = 200, live: LiveMemory | None = None
+    ) -> OpenVikingMemory:
         def handle(request: httpx.Request) -> httpx.Response:
             self.assertEqual(request.headers["X-OpenViking-Account"], "default")
             self.assertEqual(request.headers["X-OpenViking-User"], "default")
@@ -132,7 +136,67 @@ class OpenVikingTests(unittest.IsolatedAsyncioTestCase):
             self.memory,
             self.manifest,
             url="http://test",
+            live=live,
         )
+
+    async def test_one_query_searches_snapshot_and_live_messages_with_original_citations(
+        self,
+    ) -> None:
+        live = LiveMemory(self.index.parent / "live.sqlite3")
+        await live.initialize()
+        await live.record(
+            MemoryMessage(
+                -1001234,
+                1,
+                "New Redis recommendation",
+                datetime(2026, 10, 25, tzinfo=UTC),
+                10,
+                "Alice",
+                "Live group",
+                "live_group",
+            )
+        )
+        pending = await live.pending()
+        await live.indexed(pending)
+        self.candidates = [{"uri": live.uri(pending[0])}, {"uri": self.uri("message:4")}]
+        backend = self.backend(live=live)
+        result = await backend.search("storage")
+        self.assertEqual(
+            [h["memory_id"] for h in result["hits"]], ["telegram:-1001234:1", "message:4"]
+        )
+        source = result["hits"][0]["sources"][0]
+        self.assertEqual(source["chat_id"], -1001234)
+        self.assertEqual(source["url"], "https://t.me/live_group/1")
+        self.assertEqual(result["coverage"]["live"]["indexed_count"], 1)
+        self.assertEqual(self.requests[0]["target_uri"], [backend.root, live.root])
+        self.assertEqual(
+            (await backend.search(memory_id="telegram:-1001234:1"))["hits"][0]["sources"][
+                0
+            ],
+            source,
+        )
+        self.assertEqual((await backend.search("storage", author_id=99))["hits"], [])
+
+    async def test_unindexed_live_uri_cannot_be_returned_even_by_a_misbehaving_server(
+        self,
+    ) -> None:
+        live = LiveMemory(self.index.parent / "live.sqlite3")
+        await live.initialize()
+        await live.record(
+            MemoryMessage(
+                -1001234,
+                1,
+                "Pending",
+                datetime(2026, 10, 25, tzinfo=UTC),
+                10,
+                "Alice",
+                "Group",
+            )
+        )
+        self.candidates = [{"uri": live.uri((await live.pending())[0])}]
+        result = await self.backend(live=live).search("pending")
+        self.assertEqual(result["hits"], [])
+        self.assertEqual(result["coverage"]["live"]["pending_count"], 1)
 
     async def test_production_provider_requires_ready_openviking_and_never_selects_fts(
         self,
@@ -143,6 +207,7 @@ class OpenVikingTests(unittest.IsolatedAsyncioTestCase):
             openai_api_key=TEST_API_KEY,
             owner_user_id=42,  # pragma: allowlist secret -- Fake credential.
             memory_path=self.index,
+            live_memory_path=self.index.parent / "live.sqlite3",
             openviking_manifest=self.manifest,
             openviking_url="http://test",
         )
@@ -150,7 +215,8 @@ class OpenVikingTests(unittest.IsolatedAsyncioTestCase):
             memory = await container.get(MemoryBackend)
             self.assertIsInstance(memory, OpenVikingMemory)
         self.assertEqual(
-            [r["path"] for r in self.requests], ["/health", "/api/v1/fs/stat"]
+            [r["path"] for r in self.requests[:2] if "path" in r],
+            ["/health", "/api/v1/fs/stat"],
         )
         async with create_container(
             replace(settings, openviking_manifest=self.index.parent / "missing.json")
@@ -192,6 +258,14 @@ class OpenVikingTests(unittest.IsolatedAsyncioTestCase):
         hit = (await self.backend().search("the discussion"))["hits"][0]
         self.assertEqual(hit["memory_id"], key)
         self.assertEqual([source["message_id"] for source in hit["sources"]], [6, 7])
+
+    async def test_summary_sidecar_uri_descends_to_original_sources(self) -> None:
+        key = (await self.memory.search("alpha beta"))["hits"][0]["memory_id"]
+        uri = self.uri(key, directory=True) + "/.overview.md"
+        self.candidates = [{"uri": uri, "level": 1}]
+        result = await self.backend().search("discussion")
+        self.assertEqual(result["hits"][0]["memory_id"], key)
+        self.assertIn(uri, self.requests[0]["filter"]["conds"])
 
     async def test_author_and_inclusive_date_bounds_apply_before_recall_and_after_response(
         self,

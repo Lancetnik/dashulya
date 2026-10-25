@@ -4,35 +4,39 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
-from ag2 import Agent, MemoryStream
+from ag2 import Agent, MemoryStream, ResponseSchema
 from ag2.agent import AgentReply
 from ag2.events import ModelRequest, ModelResponse, TextInput
 from ag2.testing import TestConfig, TrackingConfig
 
+from dashulya.ai.agents.factory import create_reply_agent
 from dashulya.ai.dialogue import Dialogue
-from dashulya.domain.messages import ConversationKey
+from dashulya.domain.memory import ChatHistory, MemoryMessage
+from dashulya.domain.messages import ConversationKey, Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
-from tests.support import TEST_API_KEY, MemoryOverride, ModelOverrides
+from tests.support import TEST_API_KEY, MemoryOverride, ModelOverrides, reply_json
 
 SENT_AT = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 
 
 class DialogueTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.config = TrackingConfig(TestConfig("AI answer"))
+        self.config = TrackingConfig(TestConfig(reply_json("AI answer")))
         self.settings = Settings(
             bot_token="123:TEST",
             openai_api_key=TEST_API_KEY,
             owner_user_id=42,
         )
+        self.history = AsyncMock(spec=ChatHistory)
+        self.history.context.return_value = []
         self.container = create_container(
             self.settings,
-            MemoryOverride(),
+            MemoryOverride(history=self.history),
             ModelOverrides(reply=self.config, decision=TestConfig("false")),
         )
         self.addAsyncCleanup(self.container.close)
-        self.agent = await self.container.get(Agent[str])
+        self.agent = await self.container.get(Agent[Reply])
         self.real_ask = self.agent.ask
         self.ask = AsyncMock(wraps=self.real_ask)
         ask_patch = patch.object(self.agent, "ask", self.ask)
@@ -47,13 +51,15 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         user_id: int = 42,
         sent_at: datetime = SENT_AT,
     ) -> str:
-        return await self.dialogue.reply(
-            key,
-            text,
-            user_id=user_id,
-            user_name="Anna",
-            sent_at=sent_at,
-        )
+        return (
+            await self.dialogue.reply(
+                key,
+                text,
+                user_id=user_id,
+                user_name="Anna",
+                sent_at=sent_at,
+            )
+        ).text
 
     def last_stream(self) -> MemoryStream:
         return cast("MemoryStream", self.ask.call_args.kwargs["stream"])
@@ -81,7 +87,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         responses = [
             e for e in await stream.history.get_events() if isinstance(e, ModelResponse)
         ]
-        self.assertEqual([e.content for e in responses], ["AI answer", "AI answer"])
+        self.assertEqual([e.content for e in responses], [reply_json("AI answer")] * 2)
 
     async def test_each_message_keeps_its_send_time_in_ag2_history(self) -> None:
         first = datetime(2026, 10, 24, 20, 59, tzinfo=UTC)
@@ -156,11 +162,11 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
     async def test_clear_waits_for_active_reply_and_other_chats_run(self) -> None:
         started, release = asyncio.Event(), asyncio.Event()
 
-        async def blocked_ask(text: str, **kwargs: Any) -> AgentReply[str, str]:
+        async def blocked_ask(text: str, **kwargs: Any) -> AgentReply[str, Reply]:
             if "Blocked" in text:
                 started.set()
                 await release.wait()
-            return await self.real_ask(text, **kwargs)
+            return cast("AgentReply[str, Reply]", await self.real_ask(text, **kwargs))
 
         self.ask.side_effect = blocked_ask
         task = asyncio.create_task(self.reply((42, None), "Blocked"))
@@ -188,16 +194,24 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             await self.reply((42, None))
         self.ask.side_effect = None
         self.assertEqual(await self.reply((42, None)), "AI answer")
-        empty = Dialogue(Agent("empty", config=TestConfig(ModelResponse())))
+        empty = Dialogue(
+            Agent(
+                "empty",
+                config=TestConfig(ModelResponse()),
+                response_schema=ResponseSchema(Reply),
+            )
+        )
         self.assertIn(
             "couldn't generate",
-            await empty.reply(
-                (42, None),
-                "Hi",
-                user_id=42,
-                user_name="Anna",
-                sent_at=SENT_AT,
-            ),
+            (
+                await empty.reply(
+                    (42, None),
+                    "Hi",
+                    user_id=42,
+                    user_name="Anna",
+                    sent_at=SENT_AT,
+                )
+            ).text,
         )
 
     async def test_recent_context_is_isolated_and_does_not_modify_history(self) -> None:
@@ -205,7 +219,9 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         stream = self.last_stream()
         recent = await self.dialogue.recent_context((-123, 7))
         self.assertIn("Remember this discussion", recent[0]["text"])
-        self.assertEqual(recent[1], {"role": "assistant", "text": "AI answer"})
+        self.assertEqual(
+            recent[1], {"role": "assistant", "text": reply_json("AI answer")}
+        )
         self.assertEqual(len(await self.requests(stream)), 1)
         self.assertEqual(await self.dialogue.recent_context((-123, 8)), [])
 
@@ -224,11 +240,11 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         started, release = asyncio.Event(), asyncio.Event()
 
-        async def blocked_ask(text: str, **kwargs: Any) -> AgentReply[str, str]:
+        async def blocked_ask(text: str, **kwargs: Any) -> AgentReply[str, Reply]:
             if "Blocked" in text:
                 started.set()
                 await release.wait()
-            return await self.real_ask(text, **kwargs)
+            return cast("AgentReply[str, Reply]", await self.real_ask(text, **kwargs))
 
         self.ask.side_effect = blocked_ask
         task = asyncio.create_task(self.reply((-123, 7), "Blocked"))
@@ -243,9 +259,22 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             await reading
 
     async def test_group_reply_preserves_send_time_and_quotes_reply_target(self) -> None:
+        self.history.context.return_value = [
+            MemoryMessage(
+                chat_id=-123,
+                message_id=1,
+                text="Earlier message",
+                sent_at=SENT_AT,
+                author_id=123,
+                author="Dashulya",
+                chat_title="Group",
+                thread_id=7,
+            )
+        ]
         context: dict[str, object] = {
+            "message_id": 2,
             "text": "What do you mean?",
-            "reply_to": {"text": "Earlier message", "sender_id": 123},
+            "reply_to": {"message_id": 1, "text": "Earlier message", "sender_id": 123},
         }
         await self.dialogue.reply(
             (-123, 7),
@@ -255,7 +284,160 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             sent_at=SENT_AT,
             group_context=context,
         )
-        request = (await self.requests(self.last_stream()))[0]
+        stream = self.last_stream()
+        request = (await self.requests(stream))[-1]
         self.assertIn("25 October 2026 (Sunday) 15:00:00", request)
-        self.assertIn("Earlier message", request)
-        self.assertIn("untrusted quoted data", request)
+        self.assertIn("Reply to message ID: 1", request)
+        events = list(await stream.history.get_events())
+        assert isinstance(events[0], ModelResponse)
+        self.assertEqual(events[0].to_api()["role"], "assistant")
+        self.assertIn("Earlier message", events[0].content or "")
+        self.history.context.assert_awaited_once_with(
+            (-123, 7), 2, limit=20, parent_hops=5
+        )
+
+    async def test_group_turns_rebuild_history_and_keep_actual_bot_role(self) -> None:
+        streams = []
+        for number in (10, 11):
+            self.history.context.return_value = [
+                MemoryMessage(
+                    chat_id=-123,
+                    message_id=1,
+                    text="Earlier bot reply",
+                    sent_at=SENT_AT,
+                    author_id=123,
+                    author="Dashulya",
+                    chat_title="Group",
+                ),
+                MemoryMessage(
+                    chat_id=-123,
+                    message_id=2,
+                    text="Passive participant",
+                    sent_at=SENT_AT,
+                    author_id=99,
+                    author="Boris",
+                    chat_title="Group",
+                    reply_to_id=1,
+                ),
+                MemoryMessage(
+                    chat_id=-123,
+                    message_id=3,
+                    text="",
+                    sent_at=SENT_AT,
+                    author_id=456,
+                    author="Another bot",
+                    chat_title="Group",
+                    media_type="animation",
+                ),
+                MemoryMessage(
+                    chat_id=-123,
+                    message_id=number,
+                    text=f"Request {number}",
+                    sent_at=SENT_AT,
+                    author_id=42,
+                    author="Anna",
+                    chat_title="Group",
+                ),
+            ]
+            await self.dialogue.reply(
+                (-123, None),
+                f"Request {number}",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                group_context={"message_id": number},
+            )
+            stream = self.last_stream()
+            streams.append(stream)
+            events = list(await stream.history.get_events())
+            self.assertIsInstance(events[0], ModelResponse)
+            self.assertIsInstance(events[1], ModelRequest)
+            self.assertIsInstance(events[2], ModelRequest)
+            requests = await self.requests(stream)
+            self.assertIn("Passive participant", requests[0])
+            self.assertIn("Reply to message ID: 1", requests[0])
+            self.assertIn("Attachment: animation; contents unavailable", requests[1])
+            self.assertEqual(len(requests), 3)
+            self.assertEqual(requests[-1].count(f"Request {number}"), 1)
+            if number == 11:
+                self.assertIsNot(stream, streams[0])
+                self.assertNotIn("Request 10", "\n".join(requests))
+            self.assertEqual(await self.dialogue.recent_context((-123, None)), [])
+
+    async def test_group_classifier_uses_observed_history_instead_of_ai_turns(
+        self,
+    ) -> None:
+        self.history.context.return_value = [
+            MemoryMessage(
+                chat_id=-123,
+                message_id=1,
+                text="Earlier delivered answer",
+                sent_at=SENT_AT,
+                author_id=123,
+                author="Dashulya",
+                chat_title="Group",
+            ),
+            MemoryMessage(
+                chat_id=-123,
+                message_id=2,
+                text="Current request",
+                sent_at=SENT_AT,
+                author_id=42,
+                author="Anna",
+                chat_title="Group",
+            ),
+        ]
+        recent = await self.dialogue.recent_context((-123, None), through_message_id=2)
+        self.assertEqual(len(recent), 1)
+        self.assertEqual(recent[0]["role"], "assistant")
+        self.assertIn("Earlier delivered answer", recent[0]["text"])
+        self.assertNotIn("Current request", recent[0]["text"])
+
+    async def test_reply_target_must_be_in_the_selected_group_context(self) -> None:
+        self.history.context.return_value = [
+            MemoryMessage(
+                chat_id=-123,
+                message_id=1,
+                text="A selected message",
+                sent_at=SENT_AT,
+                author_id=99,
+                author="Boris",
+                chat_title="Group",
+                reply_to_id=999,
+            ),
+        ]
+        for target, expected in (
+            (None, None),
+            (1, 1),
+            (5, 5),
+            (999, None),
+            (0, None),
+            (-1, None),
+        ):
+            with self.subTest(target=target):
+                agent = create_reply_agent(
+                    TestConfig(reply_json("  Answer  ", target)), tools=[]
+                )
+                dialogue = Dialogue(agent, history=self.history, bot_id=123)
+                result = await dialogue.reply(
+                    (-123, None),
+                    "Current request",
+                    user_id=42,
+                    user_name="Anna",
+                    sent_at=SENT_AT,
+                    group_context={"message_id": 5},
+                )
+                self.assertEqual(result, Reply("Answer", expected))
+
+    async def test_private_reply_ignores_model_selected_message_id(self) -> None:
+        agent = create_reply_agent(
+            TestConfig(reply_json("Private answer", 999)), tools=[]
+        )
+        result = await Dialogue(agent).reply(
+            (42, None),
+            "Hi",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+        )
+        self.assertEqual(result, Reply("Private answer"))

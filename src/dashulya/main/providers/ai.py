@@ -9,7 +9,8 @@ from dashulya.ai.agents.factory import create_decision_agent, create_reply_agent
 from dashulya.ai.agents.models import AgentModels, create_models
 from dashulya.ai.dialogue import Dialogue
 from dashulya.ai.tools.memory import search_memory
-from dashulya.domain.memory import MemoryBackend
+from dashulya.domain.memory import ChatHistory, MemoryBackend
+from dashulya.domain.messages import Reply
 from dashulya.main.config import Settings
 
 
@@ -39,7 +40,7 @@ class AgentProvider(Provider):
         models: AgentModels,
         container: AsyncContainer,
         memory: MemoryBackend,
-    ) -> Agent[str]:
+    ) -> Agent[Reply]:
         return create_reply_agent(
             models.reply,
             tools=[search_memory],
@@ -47,8 +48,12 @@ class AgentProvider(Provider):
         )
 
     @provide
-    def dialogue(self, agent: Agent[str], settings: Settings) -> Dialogue:
-        return Dialogue(agent, timezone=settings.bot_timezone)
+    def dialogue(
+        self, agent: Agent[Reply], settings: Settings, history: ChatHistory, bot: Bot
+    ) -> Dialogue:
+        return Dialogue(
+            agent, timezone=settings.bot_timezone, history=history, bot_id=bot.id
+        )
 
     @provide
     async def addressing(self, agent: Agent[bool], bot: Bot) -> GroupAddressing:

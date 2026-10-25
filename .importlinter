@@ -3,7 +3,9 @@
 # Exhaustive contracts require every immediate child module to be assigned.
 
 [importlinter]
-root_package = dashulya
+root_packages =
+    dashulya
+    evals
 include_external_packages = True
 
 [importlinter:contract:module-hierarchy]
@@ -65,6 +67,7 @@ layers =
     router
     handlers
     middlewares | replies
+    messages
     formatting
 exhaustive = True
 
@@ -98,5 +101,12 @@ source_modules =
 forbidden_modules =
     dashulya.memory.__main__
     dashulya.memory.index
-    dashulya.memory.experiment
     dashulya.memory.openviking_index
+
+[importlinter:contract:runtime-without-evaluations]
+name = Application does not depend on evaluation infrastructure
+type = forbidden
+source_modules =
+    dashulya
+forbidden_modules =
+    evals

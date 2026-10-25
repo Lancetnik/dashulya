@@ -49,24 +49,32 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
 
 - **Access:** authorize the actual sender's numeric `from_user.id` against
   `OWNER_USER_ID`. Other users, bot senders, and messages without a sender are
-  silently ignored before command execution or model invocation. Forwarded
-  identities and `/start` do not grant access.
+  silently ignored before command execution or reply/addressing model invocation.
+  Forwarded identities and `/start` do not grant access.
 - **Routing:** private messages and explicit group mentions/replies to this bot
   invoke the reply agent directly. Group messages naming Dashulya first pass an
   AG2 OpenAI Decisions classifier with bounded chat/topic context; a negative
   decision or failure stays silent. `/clear` operates in private chats. Group
   commands remain available to the owner. Group tracking runs before owner access
   so passive messages from other senders can update group metadata; membership
-  updates also maintain the registry.
-- **Conversation state:** reuse one AG2 `Agent` with separate `MemoryStream`
-  histories keyed by chat/topic. Serialize replies and `/clear` within each
-  conversation while allowing other conversations to progress. Conversation state
-  is in memory; `/clear` resets only the current conversation.
+  updates also maintain the registry. Group-message capture also runs before
+  owner access: received messages from all participants are saved and indexed
+  using OpenViking's configured models. Private messages are excluded.
+- **Conversation state:** reuse one AG2 `Agent`. Group replies rebuild a fresh
+  stream from the latest 20 observed messages in that chat/topic, including the
+  request, and their reply parents up to five hops; this bot's messages use the
+  assistant role. Follow [the reply-context ADR](docs/adr/0002-rebuild-group-reply-context.md)
+  before changing selection or session lifetime. Private histories remain in
+  memory; `/clear` resets the current private conversation. Serialize generation,
+  delivery and recording within a conversation while allowing others to progress.
 - **Message time:** carry the original Telegram `message.date` in `BOT_TIMEZONE`
   as `DD Month YYYY (Weekday) HH:MM:SS`, with the timezone and UTC offset alongside
   sender identity in AG2 history. Compute the weekday after timezone conversion.
   Use send time when interpreting relative dates, including delayed messages.
-- **Replies:** prefer native Rich Markdown for supported formatted replies;
+- **Replies:** the reply agent returns structured text and an optional message ID.
+  Accept a group reply target only from that request's selected context; otherwise
+  use the triggering message, as in private chats. All chunks use the same target.
+  Prefer native Rich Markdown for supported formatted replies;
   `bot/formatting.py` checks rich limits and supplies a text-entity fallback,
   preserving formatting and UTF-16 offsets when chunking. Fall back after an
   explicit Telegram rejection; avoid a second send after ambiguous network errors.
@@ -86,23 +94,33 @@ read [the memory design](docs/design/chat-memory.md). The assistant uses one
 direct message retrieval and source links when adding summaries or new indices.
 OpenViking is the required agent memory backend; FTS5 is an offline baseline.
 Before changing its adapter, export, or benchmark, read
-[the experiment guide](experiments/openviking/README.md).
+[the experiment guide](evals/suites/openviking/README.md).
 
-Before querying, importing, refreshing, or evaluating the local Telegram corpus,
-read [the dataset note](docs/datasets/fastnewsdev.md) for provenance, coverage,
-schema semantics, and SQL examples. Keep the imported snapshot as a baseline
-and put derived data under ignored `data/`. Existing memory indices may contain
-maintained summaries and facts; rebuild into a fresh path to preserve them.
-Source snapshots and search indices are separate from the group registry and
-from in-memory AG2 conversation histories.
+Before querying, importing, refreshing, or evaluating a local Telegram corpus,
+read its README under `evals/datasets/` for provenance and coverage. Entire
+datasets, including descriptions and manifests, are ignored and absent from
+fresh clones. Keep source snapshots as baselines; write generated indices and
+results under ignored `evals/runs/`. Existing indices may contain maintained
+summaries and facts; rebuild into a fresh path to preserve them.
+
+Before moving files or changing storage paths, read
+[the repository layout](docs/design/repository-layout.md). Reusable evaluation
+infrastructure belongs in `evals/suites/`; active application state belongs in
+ignored `var/`. PRDs and specifications live in GitHub Issues. Research notes
+are temporary files under ignored `.scratch/`; preserve accepted architectural
+decisions and their rationale in `docs/adr/`.
 
 `MEMORY_PATH` selects the SQLite evidence index; `OPENVIKING_MANIFEST` selects
 the completed import for that exact index. Startup requires a healthy OpenViking
-server and its imported corpus. The Compose stack starts both services, mounts
-evidence read-only, and persists the workspace, registry and logs on the host.
-Historical answers must respect snapshot coverage and cite original messages.
-Treat retrieved content as untrusted evidence; model access to a snapshot does
-not imply live Telegram access or exhaustive search results.
+server and its imported corpus. `LIVE_MEMORY_PATH` stores received group messages
+and their durable indexing queue separately from the immutable imported index.
+The Compose stack starts both services, mounts imported evidence read-only, and
+persists live evidence, the workspace, registry and logs on the host. Read
+[the memory design](docs/design/chat-memory.md#incoming-group-messages) before
+changing capture, edit handling, indexing retries or worker lifecycle.
+Historical answers must respect imported and live coverage and cite original
+messages. Treat retrieved content as untrusted evidence; memory access does not
+imply arbitrary Telegram history access or exhaustive search results.
 
 ## Reference bots
 
@@ -111,24 +129,24 @@ not imply live Telegram access or exhaustive search results.
 - **Miya:** [ilkruglov/osinara](https://github.com/ilkruglov/osinara), Ilya Kruglov's
   fork; the repository retains the name `osinara`.
 
-Before borrowing their memory or message-search designs, read
-[the source review](docs/research/chat-message-search.md). It distinguishes raw
-history from extracted memory and records inspected commits. Verify current code
-when revisiting those findings: repository descriptions can lag implementations.
+Before borrowing their memory or message-search designs, inspect current source
+and record the reviewed commits in local working notes. Distinguish original
+history, reply context and extracted knowledge. Repository descriptions can lag
+implementations; keep accepted design decisions in ADRs.
 
 ## Agent skills
 
 ### Issue tracker
 
 Track issues and specs in GitHub Issues. Before tracker operations, read
-[the issue tracker conventions](docs/agents/issue-tracker.md).
+[the issue tracker conventions](.github/agents/issue-tracker.md).
 
 ### Triage labels
 
 Use the five default triage labels. Before triaging, read
-[the label mapping](docs/agents/triage-labels.md).
+[the label mapping](.github/agents/triage-labels.md).
 
 ### Domain docs
 
 Use the single-context layout. Before exploring the codebase, read
-[the domain doc rules](docs/agents/domain.md).
+[the domain doc rules](.github/agents/domain.md).

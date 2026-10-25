@@ -17,7 +17,15 @@ logger = logging.getLogger(__name__)
 
 def group_message(message: Message, *, include_reply: bool = True) -> GroupMessage:
     sender = message.from_user
-    text = message.text or message.caption or ""
+    text = (
+        message.text
+        or message.caption
+        or (
+            message.rich_message.model_dump_json(exclude_none=True)
+            if message.rich_message
+            else ""
+        )
+    )
     return GroupMessage(
         message_id=message.message_id,
         text=text,
@@ -54,10 +62,10 @@ async def group_chat(
     try:
         should_reply = await addressing.should_reply(
             incoming,
-            recent_conversation=await dialogue.recent_context((
-                message.chat.id,
-                message.message_thread_id,
-            )),
+            recent_conversation=await dialogue.recent_context(
+                (message.chat.id, message.message_thread_id),
+                through_message_id=message.message_id,
+            ),
         )
     except Exception as error:
         logger.warning(

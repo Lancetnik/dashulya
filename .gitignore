@@ -3,7 +3,12 @@
 .env.*
 !.env.example
 
-# Local chat data and runtime
+# Private evaluation data, generated runs, runtime state and scratch work
+/evals/datasets/
+/evals/runs/
+/var/
+/.scratch/
+# Retired local paths: keep accidental copies out of Git.
 /data/
 /logs/
 *.db
