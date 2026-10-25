@@ -1,6 +1,6 @@
 <div align="center">
   <a href="https://t.me/dashulya_ai">
-    <img src="assets/avatar-circle.png" width="80" height="80" alt="Dashulya's circular avatar" />
+    <img src="assets/avatar-circle.png" width="160" height="160" alt="Dashulya's circular avatar" />
   </a>
   <p>
     <strong>Dashulya</strong> &nbsp; <a href="https://t.me/dashulya_ai">@dashulya_ai</a><br />
