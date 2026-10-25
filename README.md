@@ -1,19 +1,15 @@
-<table>
-  <tr>
-    <td width="96" valign="top">
-      <a href="https://t.me/dashulya_ai">
-        <img src="assets/avatar-circle.png" width="80" height="80" alt="Dashulya's circular avatar" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong>Dashulya</strong> &nbsp; <a href="https://t.me/dashulya_ai">@dashulya_ai</a><br />
-      Спрашивай, котик💋<br />
-      <sub>Ask away, kitten.</sub>
-    </td>
-  </tr>
-</table>
-
-<sub>Also <a href="https://t.me/dashulyai_bot">@dashulyai_bot</a> · A Telegram assistant with memory and a sense of humor · Owner-only prototype</sub>
+<div align="center">
+  <a href="https://t.me/dashulya_ai">
+    <img src="assets/avatar-circle.png" width="80" height="80" alt="Dashulya's circular avatar" />
+  </a>
+  <p>
+    <strong>Dashulya</strong> &nbsp; <a href="https://t.me/dashulya_ai">@dashulya_ai</a><br />
+    Спрашивай, котик💋
+  </p>
+  <p>
+    <sub>Also <a href="https://t.me/dashulyai_bot">@dashulyai_bot</a> · A Telegram assistant with memory and a sense of humor · Owner-only prototype</sub>
+  </p>
+</div>
 
 ---
 
