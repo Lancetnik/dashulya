@@ -7,6 +7,15 @@ from tests.postgres import PostgresTestCase
 
 
 class LexicalIndexTests(PostgresTestCase):
+    async def test_long_tokens_remain_searchable_beyond_postgres_index_tuple_limit(
+        self,
+    ) -> None:
+        index = LexicalIndex(self.database)
+        text = "prefix" + "x" * 12000
+        await index.prepare([text])
+        keys = [index.key(text)]
+        self.assertEqual(await index.search(keys, keys, ["prefix"], limit=1), keys)
+
     async def test_postgres_bm25_matches_sqlite_reference_over_authorized_corpus(
         self,
     ) -> None:

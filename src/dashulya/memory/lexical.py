@@ -37,8 +37,16 @@ class LexicalIndex:
                         continue
                     async with connection.cursor() as writer:
                         await writer.executemany(
-                            "INSERT INTO lexical_terms VALUES (%s,%s,%s)",
-                            [(key, term, count) for term, count in frequencies.items()],
+                            "INSERT INTO lexical_terms(document_key,term,frequency,term_key) VALUES (%s,%s,%s,%s)",
+                            [
+                                (
+                                    key,
+                                    term,
+                                    count,
+                                    hashlib.sha256(term.encode()).hexdigest(),
+                                )
+                                for term, count in frequencies.items()
+                            ],
                         )
 
     async def search(

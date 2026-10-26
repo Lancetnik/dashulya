@@ -38,9 +38,21 @@ CREATE TABLE IF NOT EXISTS lexical_documents (
 CREATE TABLE IF NOT EXISTS lexical_terms (
     document_key TEXT NOT NULL REFERENCES lexical_documents(document_key) ON DELETE CASCADE,
     term TEXT NOT NULL, frequency INTEGER NOT NULL,
-    PRIMARY KEY (document_key, term)
+    term_key TEXT NOT NULL,
+    PRIMARY KEY (document_key, term_key)
 );
-CREATE INDEX IF NOT EXISTS lexical_prefix ON lexical_terms(term text_pattern_ops);
+ALTER TABLE lexical_terms ADD COLUMN IF NOT EXISTS term_key TEXT;
+UPDATE lexical_terms SET term_key=encode(sha256(convert_to(term,'UTF8')),'hex') WHERE term_key IS NULL;
+ALTER TABLE lexical_terms ALTER COLUMN term_key SET NOT NULL;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='lexical_terms'::regclass AND conname='lexical_terms_pkey' AND pg_get_constraintdef(oid) LIKE '%document_key, term)%') THEN
+        ALTER TABLE lexical_terms DROP CONSTRAINT lexical_terms_pkey;
+        ALTER TABLE lexical_terms ADD PRIMARY KEY(document_key,term_key);
+    END IF;
+END $$;
+DROP INDEX IF EXISTS lexical_prefix;
+CREATE INDEX IF NOT EXISTS lexical_short_prefix ON lexical_terms(term text_pattern_ops)
+    WHERE octet_length(term)<2000;
 
 CREATE TABLE IF NOT EXISTS source_snapshots (
     source_key TEXT PRIMARY KEY, metadata JSONB NOT NULL,
