@@ -3,7 +3,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import cast
 from zoneinfo import ZoneInfo
@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from ag2 import Agent, MemoryStream
 from ag2.events import BaseEvent, ModelMessage, ModelRequest, ModelResponse, TextInput
 
+from dashulya.ai.group_context import format_group_context
 from dashulya.domain.memory import (
     ChatHistory,
     ChatMemoryService,
@@ -79,39 +80,52 @@ class Dialogue:
             f"{user_name} (Telegram user ID: {user_id}):\n{text}"
         )
 
-    def _history_text(self, message: MemoryMessage) -> str:
-        text = self._text(
-            message.text,
-            sent_at=message.sent_at,
-            user_id=message.author_id,
-            user_name=message.author,
+    async def _group_input(
+        self, key: ConversationKey, current: MemoryMessage
+    ) -> tuple[MemoryStream, str, set[int]]:
+        originals = await self._group_history(key, current.message_id)
+        saved = next(
+            (item for item in originals if item.message_id == current.message_id),
+            current,
         )
-        text += f"\nTelegram message ID: {message.message_id}"
-        username = f"@{message.username.lstrip('@')}" if message.username else "unknown"
-        text += f"\nTelegram username: {username}"
-        text += f"\nSender is bot: {str(message.is_bot).lower() if message.is_bot is not None else 'unknown'}"
-        if message.reply_to_id is not None:
-            text += f"\nReply to message ID: {message.reply_to_id}"
-        if message.media_type:
-            text += f"\n[Attachment: {message.media_type}; contents unavailable]"
-        return text
-
-    def _role(self, message: MemoryMessage) -> str:
-        return (
-            "assistant"
-            if self._bot_id is not None and message.author_id == self._bot_id
-            else "user"
+        current = replace(
+            saved,
+            text=current.text,
+            sent_at=current.sent_at,
+            author_id=current.author_id,
+            author=current.author,
+            reply_to_id=current.reply_to_id
+            if current.reply_to_id is not None
+            else saved.reply_to_id,
         )
+        originals = [item for item in originals if item.message_id != current.message_id]
+        originals.append(current)
+        rendered = format_group_context(
+            originals, timezone=self._timezone, bot_id=self._bot_id
+        )
+        events: list[BaseEvent] = []
+        for item in rendered[:-1]:
+            if item["role"] == "assistant":
+                events.append(ModelResponse(ModelMessage(item["text"])))
+            else:
+                events.append(ModelRequest([TextInput(item["text"])]))
+        stream = MemoryStream()
+        await stream.history.replace(events)
+        return stream, rendered[-1]["text"], {item.message_id for item in originals}
 
     async def recent_context(
         self, key: ConversationKey, *, through_message_id: int | None = None
     ) -> list[dict[str, str]]:
         if through_message_id is not None:
-            return [
-                {"role": self._role(message), "text": self._history_text(message)}
-                for message in await self._group_history(key, through_message_id)
-                if message.message_id != through_message_id
-            ]
+            return format_group_context(
+                [
+                    message
+                    for message in await self._group_history(key, through_message_id)
+                    if message.message_id != through_message_id
+                ],
+                timezone=self._timezone,
+                bot_id=self._bot_id,
+            )
         conversation = self._conversation(key)
         async with conversation.lock:
             recent: list[dict[str, str]] = []
@@ -175,26 +189,22 @@ class Dialogue:
                     raise ValueError(error_message)
                 message_id = cast("int", group_context["message_id"])
                 current_message_id = message_id
-                stream = MemoryStream()
-                allowed_reply_ids.add(message_id)
-                events: list[BaseEvent] = []
-                for previous in await self._group_history(key, message_id):
-                    allowed_reply_ids.add(previous.message_id)
-                    if previous.message_id == message_id:
-                        continue
-                    if self._role(previous) == "assistant":
-                        events.append(
-                            ModelResponse(ModelMessage(self._history_text(previous)))
-                        )
-                    else:
-                        events.append(
-                            ModelRequest([TextInput(self._history_text(previous))])
-                        )
-                await stream.history.replace(events)
-                message += f"\nTelegram message ID: {message_id}"
                 parent = group_context.get("reply_to")
-                if isinstance(parent, dict):
-                    message += f"\nReply to message ID: {parent.get('message_id')}"
+                parent_id = parent.get("message_id") if isinstance(parent, dict) else None
+                stream, message, allowed_reply_ids = await self._group_input(
+                    key,
+                    MemoryMessage(
+                        key[0],
+                        message_id,
+                        text,
+                        sent_at,
+                        user_id,
+                        user_name,
+                        "",
+                        thread_id=key[1],
+                        reply_to_id=parent_id if isinstance(parent_id, int) else None,
+                    ),
+                )
             async with asyncio.timeout(90):
                 access = MemoryAccess(
                     chat_id=key[0],

@@ -293,12 +293,13 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         )
         stream = self.last_stream()
         request = (await self.requests(stream))[-1]
-        self.assertIn("25 October 2026 (Sunday) 15:00:00", request)
-        self.assertIn("Reply to message ID: 1", request)
+        self.assertIn("25 October 2026 (Sunday)", "\n".join(await self.requests(stream)))
+        self.assertIn("time: 15:00:00", request)
+        self.assertIn("reply_to: 1", request)
         events = list(await stream.history.get_events())
-        assert isinstance(events[0], ModelResponse)
-        self.assertEqual(events[0].to_api()["role"], "assistant")
-        self.assertIn("Earlier message", events[0].content or "")
+        assert isinstance(events[1], ModelResponse)
+        self.assertEqual(events[1].to_api()["role"], "assistant")
+        self.assertIn("Earlier message", events[1].content or "")
         self.history.context.assert_awaited_once_with(
             (-123, 7), 2, limit=20, parent_hops=5
         )
@@ -357,14 +358,15 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             stream = self.last_stream()
             streams.append(stream)
             events = list(await stream.history.get_events())
-            self.assertIsInstance(events[0], ModelResponse)
-            self.assertIsInstance(events[1], ModelRequest)
+            self.assertIsInstance(events[0], ModelRequest)
+            self.assertIsInstance(events[1], ModelResponse)
             self.assertIsInstance(events[2], ModelRequest)
+            self.assertIsInstance(events[3], ModelRequest)
             requests = await self.requests(stream)
-            self.assertIn("Passive participant", requests[0])
-            self.assertIn("Reply to message ID: 1", requests[0])
-            self.assertIn("Attachment: animation; contents unavailable", requests[1])
-            self.assertEqual(len(requests), 3)
+            self.assertIn("Passive participant", requests[1])
+            self.assertIn("reply_to: 1", requests[1])
+            self.assertIn('attachment: "animation" (contents unavailable)', requests[2])
+            self.assertEqual(len(requests), 4)
             self.assertEqual(requests[-1].count(f"Request {number}"), 1)
             if number == 11:
                 self.assertIsNot(stream, streams[0])
@@ -395,9 +397,9 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             ),
         ]
         recent = await self.dialogue.recent_context((-123, None), through_message_id=2)
-        self.assertEqual(len(recent), 1)
-        self.assertEqual(recent[0]["role"], "assistant")
-        self.assertIn("Earlier delivered answer", recent[0]["text"])
+        self.assertEqual(len(recent), 2)
+        self.assertEqual(recent[1]["role"], "assistant")
+        self.assertIn("Earlier delivered answer", recent[1]["text"])
         self.assertNotIn("Current request", recent[0]["text"])
 
     async def test_reply_target_must_be_in_the_selected_group_context(self) -> None:

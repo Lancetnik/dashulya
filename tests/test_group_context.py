@@ -182,7 +182,7 @@ class GroupContextTests(PostgresTestCase):
         self.assertEqual(
             [
                 int(number)
-                for number in re.findall(r"Telegram message ID: (\d+)", rendered)
+                for number in re.findall(r"^- id: (\d+)$", rendered, flags=re.MULTILINE)
             ],
             [1, *range(8, 28)],
         )
@@ -212,9 +212,9 @@ class GroupContextTests(PostgresTestCase):
             )
         self.assertEqual(recent.call_args.args[0], (CHAT["id"], None))
         context = await dialogue.recent_context((CHAT["id"], None), through_message_id=3)
-        self.assertEqual(len(context), 2)
-        self.assertIn("Earlier independent message", context[0]["text"])
-        self.assertIn("Earlier reply branch", context[1]["text"])
+        self.assertEqual(len(context), 3)
+        self.assertIn("Earlier independent message", context[1]["text"])
+        self.assertIn("Earlier reply branch", context[2]["text"])
         self.ask.assert_not_awaited()
 
     async def test_forum_general_topic_does_not_read_other_topics(self) -> None:
@@ -278,14 +278,13 @@ class GroupContextTests(PostgresTestCase):
             for part in event.parts
             if isinstance(part, TextInput)
         ]
-        self.assertIn("We were discussing cats", requests[0])
-        self.assertIn("Boris (Telegram user ID: 99)", requests[0])
-        self.assertIn("Reply to message ID: 3", requests[-1])
+        self.assertIn("We were discussing cats", "\n".join(requests))
+        self.assertIn('99: "Boris', requests[0])
+        self.assertIn("reply_to: 3", requests[-1])
         earlier_bot = [
             event
             for event in events
-            if isinstance(event, ModelResponse)
-            and "Telegram message ID: 3" in (event.content or "")
+            if isinstance(event, ModelResponse) and "- id: 3" in (event.content or "")
         ]
         self.assertEqual(len(earlier_bot), 1)
         self.assertEqual(earlier_bot[0].to_api()["role"], "assistant")

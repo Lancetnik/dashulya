@@ -45,7 +45,7 @@ containers =
     dashulya.ai
 layers =
     agents | dialogue | addressing | embeddings
-    tools
+    tools | group_context
     prompts
 exhaustive = True
 

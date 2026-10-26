@@ -122,6 +122,15 @@ Each reply uses a fresh stream, with this bot's previous messages assigned the
 assistant role. This selection is separate from historical memory access; see
 [the reply-context ADR](../adr/0002-rebuild-group-reply-context.md).
 
+`ai/group_context.py` formats both reply and addressing context. One shared users
+roster replaces repeated names, handles and bot flags. Local day and UTC-offset
+headings apply to compact `id`, `sender`, `time`, `text` and optional `reply_to` /
+`attachment` entries. Text is JSON-quoted to preserve escapes and multiline
+content without creating metadata fields. Unknown handles are omitted; unknown
+numeric senders receive separate local references. The roster is an extra
+metadata input, while each original retains its user/assistant API role and
+only original message IDs can become reply targets.
+
 ## Preparation, startup and storage
 
 `DATABASE_URL` selects one PostgreSQL database. `Database` owns one asynchronous

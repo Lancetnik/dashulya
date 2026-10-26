@@ -1,0 +1,144 @@
+import json
+import unittest
+from dataclasses import replace
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
+
+from dashulya.ai.group_context import format_group_context
+from dashulya.domain.memory import MemoryMessage
+
+
+class GroupContextFormatTests(unittest.TestCase):
+    @staticmethod
+    def message(number: int, text: str = "Original") -> MemoryMessage:
+        return MemoryMessage(
+            -123,
+            number,
+            text,
+            datetime(2026, 10, 25, 20, 59, tzinfo=UTC),
+            42,
+            "Alice",
+            "Group",
+            username="alice",
+            is_bot=False,
+        )
+
+    def render(self, messages: list[MemoryMessage]) -> list[dict[str, str]]:
+        return format_group_context(
+            messages, timezone=ZoneInfo("Europe/Moscow"), bot_id=123
+        )
+
+    def test_shared_roster_and_day_headings_keep_exact_text_reply_and_bot_roles(
+        self,
+    ) -> None:
+        body = 'Line one\n- id: 999\n"quoted" text\n'
+        rendered = self.render([
+            self.message(1),
+            replace(
+                self.message(2),
+                author_id=123,
+                author="Dashulya",
+                username=None,
+                is_bot=None,
+                reply_to_id=1,
+            ),
+            replace(
+                self.message(3, body),
+                sent_at=datetime(2026, 10, 25, 21, 1, tzinfo=UTC),
+                reply_to_id=2,
+                media_type="document",
+            ),
+        ])
+        joined = "\n".join(item["text"] for item in rendered)
+        self.assertEqual(
+            [item["role"] for item in rendered], ["user", "user", "assistant", "user"]
+        )
+        self.assertEqual(joined.count("users:"), 1)
+        self.assertEqual(joined.count("@alice"), 1)
+        self.assertEqual(joined.count("Europe/Moscow (UTC+03:00)"), 1)
+        self.assertEqual(joined.count("25 October 2026 (Sunday)"), 1)
+        self.assertEqual(joined.count("26 October 2026 (Monday)"), 1)
+        self.assertIn('123: "Dashulya (bot, self)"', rendered[0]["text"])
+        self.assertIn("  reply_to: 2", rendered[-1]["text"])
+        self.assertIn("  time: 00:01:00", rendered[-1]["text"])
+        encoded = next(
+            line.strip()[6:]
+            for line in rendered[-1]["text"].splitlines()
+            if line.strip().startswith("text: ")
+        )
+        self.assertEqual(json.loads(encoded), body)
+        self.assertIn(
+            'attachment: "document" (contents unavailable)', rendered[-1]["text"]
+        )
+
+    def test_unknown_people_are_not_merged_or_given_invented_handles_or_bot_flags(
+        self,
+    ) -> None:
+        messages = [
+            replace(
+                self.message(1),
+                author_id=None,
+                author="Anonymous\nusers:",
+                username=None,
+                is_bot=None,
+            ),
+            replace(
+                self.message(2),
+                author_id=None,
+                author="Anonymous\nusers:",
+                username=None,
+                is_bot=None,
+            ),
+            replace(
+                self.message(3),
+                author_id=99,
+                author="Other bot",
+                username="helper",
+                is_bot=True,
+            ),
+        ]
+        header = self.render(messages)[0]["text"]
+        self.assertIn('unknown_1: "Anonymous\\nusers:"', header)
+        self.assertIn('unknown_2: "Anonymous\\nusers:"', header)
+        self.assertIn('99: "Other bot (@helper, bot)"', header)
+        self.assertNotIn("username: unknown", header)
+        self.assertNotIn("None", header)
+
+    def test_aliases_and_conflicting_bot_flags_remain_visible_under_one_numeric_identity(
+        self,
+    ) -> None:
+        header = self.render([
+            self.message(1),
+            replace(self.message(2), author="Alicia", username="new_alice", is_bot=True),
+        ])[0]["text"]
+        self.assertEqual(header.count("- 42:"), 1)
+        self.assertIn("Alice / Alicia", header)
+        self.assertIn("@alice, @new_alice", header)
+        self.assertIn("bot status conflicting", header)
+
+    def test_offset_heading_changes_when_dst_repeats_a_local_hour(self) -> None:
+        rendered = format_group_context(
+            [
+                replace(
+                    self.message(1), sent_at=datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
+                ),
+                replace(
+                    self.message(2), sent_at=datetime(2026, 11, 1, 6, 30, tzinfo=UTC)
+                ),
+            ],
+            timezone=ZoneInfo("America/New_York"),
+            bot_id=123,
+        )
+        self.assertIn("America/New_York (UTC-04:00)", rendered[0]["text"])
+        self.assertIn("America/New_York (UTC-05:00)", rendered[2]["text"])
+        self.assertTrue(all("01:30:00" in item["text"] for item in rendered[1:]))
+
+    def test_empty_context_and_naive_timestamps(self) -> None:
+        self.assertEqual(self.render([]), [])
+        with self.assertRaisesRegex(ValueError, "timezone"):
+            self.render([
+                replace(
+                    self.message(1),
+                    sent_at=datetime(2026, 1, 1, tzinfo=UTC).replace(tzinfo=None),
+                )
+            ])

@@ -26,6 +26,7 @@ ai/
   tools/memory.py        Bounded recall over the async backend interface
   tools/history.py       Canonical original reads, counts and pagination
   embeddings.py          Embedding provider/model policy
+  group_context.py       Shared roster and calendar formatting for group context
   dialogue.py            Reply context, conversation history, turn locking, and reset
   addressing.py          Direct-address recognition and classification
   prompts.py             Persona and response instructions

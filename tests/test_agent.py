@@ -124,9 +124,10 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(output_format["schema"]["additionalProperties"])
             messages = [entry for entry in request["input"] if entry["role"] != "system"]
             self.assertEqual(
-                [entry["role"] for entry in messages], ["user", "assistant", "user"]
+                [entry["role"] for entry in messages],
+                ["user", "user", "assistant", "user"],
             )
-            self.assertIn("Previously delivered answer", json.dumps(messages[1]))
+            self.assertIn("Previously delivered answer", json.dumps(messages[2]))
             self.assertNotIn("Fresh answer", json.dumps(messages))
         self.assertNotIn("Current request 3", json.dumps(requests[1]["input"]))
 

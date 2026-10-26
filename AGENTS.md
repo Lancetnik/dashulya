@@ -70,9 +70,11 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
   before changing selection or session lifetime. Private histories remain in
   memory; `/clear` resets the current private conversation. Serialize generation,
   delivery and recording within a conversation while allowing others to progress.
-- **Message time:** carry the original Telegram `message.date` in `BOT_TIMEZONE`
-  as `DD Month YYYY (Weekday) HH:MM:SS`, with the timezone and UTC offset alongside
-  sender identity in AG2 history. Compute the weekday after timezone conversion.
+- **Message time:** carry the original Telegram `message.date` in `BOT_TIMEZONE`.
+  Private inputs use `DD Month YYYY (Weekday) HH:MM:SS` with timezone and UTC offset.
+  Group inputs share a users roster and calendar headings, with local times in
+  compact message entries; preserve user/assistant roles and exact source text.
+  Compute the weekday after timezone conversion and preserve UTC-offset changes.
   Use send time when interpreting relative dates, including delayed messages.
 - **Replies:** the reply agent returns structured text and an optional message ID.
   Accept a group reply target only from that request's selected context; otherwise

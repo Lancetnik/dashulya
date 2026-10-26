@@ -368,9 +368,10 @@ class MemoryAccessIntegrationTests(PostgresTestCase):
         dialogue = await container.get(Dialogue)
         context = await dialogue.recent_context((GROUP, None), through_message_id=3)
         rendered = str(context)
-        self.assertIn("Sender is bot: unknown", rendered)
-        self.assertIn("Telegram username: @agent_name", rendered)
-        self.assertIn("Sender is bot: true", rendered)
+        self.assertNotIn("Sender is bot:", rendered)
+        self.assertIn("users:", rendered)
+        self.assertIn("@agent_name, bot", rendered)
+        self.assertNotIn("username: unknown", rendered)
         self.assertNotIn("Foreign secret", rendered)
         self.assertEqual(config.calls, [])
 
