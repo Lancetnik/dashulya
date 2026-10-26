@@ -97,7 +97,11 @@ The [native API schema](https://developers.openai.com/api/reference/resources/de
 and [model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna)
 describe the supported interface; the native client uses
 [OpenAI Python 3.37.0](https://github.com/openai/openai-python/tree/v3.37.0/src/openai/resources/decisions).
-Local manifests pin the SDK implementation.
+Local manifests pin the SDK implementation. A separate audit of 172 native
+reranking calls across R, C and R+C recorded successful native responses with
+no fallback or refusal: 8,888,298 input tokens and zero reported output tokens.
+Those native counters are separate from AG2 answer usage; they do not imply
+zero cost or include preparation, answer generation or judging.
 
 ## Answering and scoring
 
@@ -278,7 +282,12 @@ With explicit user approval, the active preparation waiter's polling interval
 was changed from 50ms to 10s. Source bytes, summary content, model settings,
 vectors and recall were unchanged. Embedding drain increased from about 1.8 to
 24 records/s; all 132,584 native embedding jobs completed without native
-requeues/errors. Both prefix imports completed and all canonical leaves were
+requeues/errors. Native preparation telemetry across the full and earlier
+prefixes records 72,702,271 LLM input tokens, 38,163,979 LLM output tokens and
+49,532,959 embedding tokens. These imports are shared by all O profiles; do not
+charge them once per profile or conflate native tokens with AG2 answer/judge
+usage. Monetary cost was not inferred from incomplete cross-provider counters.
+Both prefix imports completed and all canonical leaves were
 reconciled. Audits parsed all 41,342 generated abstracts and 41,342 overviews
 without empty content, decoding errors or native fallback markers. Eight
 overviews contained unresolved sample-navigation links; these are not used as
