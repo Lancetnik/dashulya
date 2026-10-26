@@ -76,6 +76,7 @@ class _RecordingBackend:
         query: str = "",
         *,
         memory_id: str | None = None,
+        chat: str | None = None,
         author_id: int | None = None,
         after: str | None = None,
         before: str | None = None,
@@ -84,6 +85,7 @@ class _RecordingBackend:
         arguments = {
             "query": query,
             "memory_id": memory_id,
+            "chat": chat,
             "author_id": author_id,
             "after": after,
             "before": before,
@@ -95,6 +97,7 @@ class _RecordingBackend:
             result = await self.backend.search(
                 query,
                 memory_id=memory_id,
+                chat=chat,
                 author_id=author_id,
                 after=after,
                 before=before,

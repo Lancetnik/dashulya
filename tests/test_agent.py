@@ -316,4 +316,6 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
                 for item in requests[1]["input"]
             )
         )
-        memory.search.assert_awaited_once()
+        self.assertEqual(memory.search.await_count, 2)
+        self.assertEqual(memory.search.await_args_list[0].args, ("Search redis",))
+        self.assertEqual(memory.search.await_args_list[1].args, ("redis",))

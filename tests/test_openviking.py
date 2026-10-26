@@ -469,3 +469,11 @@ class OpenVikingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("viking://resources/another-owner/secret.md", mapping)
         with self.assertRaisesRegex(ValueError, "incomplete"):
             reconcile_resources(self.manifest, [])
+
+    async def test_legacy_backend_rejects_unsupported_chat_before_service_access(
+        self,
+    ) -> None:
+        backend = self.backend()
+        with self.assertRaisesRegex(ValueError, "does not support chat selection"):
+            await backend.search("PostgreSQL", chat="telegram:-100123")
+        self.assertEqual(self.requests, [])

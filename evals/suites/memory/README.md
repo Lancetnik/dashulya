@@ -1,10 +1,18 @@
 # Chat-memory implementation comparison
 
 This suite compares isolated experimental memory implementations against
-source-grounded questions. It does not select a replacement for the running
-bot's backend. [ADR 0001](../../../docs/adr/0001-openviking-memory.md) continues
-to govern production; the experiment addresses the replacement behavior in
+source-grounded questions and validates the selected application through its
+actual reply path. [ADR 0004](../../../docs/adr/0004-select-source-hybrid-memory.md)
+selects hybrid recall over original messages following the owner's explicit
+choice; [ADR 0001](../../../docs/adr/0001-openviking-memory.md) preserves the older
+OpenViking pilot. The broader replacement behavior remains in
 [PRD #3](https://github.com/Lancetnik/dashulya/issues/3).
+
+The [evaluation record](RESULTS.md) distinguishes the common engine comparison,
+confirmation generations, independent agent source audits and production-path
+results. The production PR does not claim all PRD acceptance criteria or a held-out
+quality result. Private cases, source dumps and per-answer artifacts are excluded
+from Git.
 
 ## Variants
 
@@ -14,9 +22,18 @@ to govern production; the experiment addresses the replacement behavior in
 | `raw_hybrid` | The same original-message blocks with BM25 and cached dense embeddings combined by reciprocal rank fusion |
 | `claims` | Automatic qualified-claim extraction, exact source quotes, correction/change/uncertainty reconciliation and lexical knowledge recall |
 | `hindsight` | Pinned OSS Hindsight with LLM-extracted native world/experience facts and canonical source reconstruction; observations disabled |
+| `claims_dense` | Source-verified claims with BM25 and shared cached embeddings |
+| `openviking` | Pinned native historical export/import and canonical reconstruction |
+| `hindsight_concise` | Native concise extraction, observations disabled |
 | `hindsight_chunks` | The same OSS engine's native raw-chunk mode: embeddings, BM25 and temporal/semantic links; no LLM extraction or observations |
 
-Every variant implements the same interface in [types.py](types.py). Preparation
+[matrix.py](matrix.py) adds every nonempty combination of raw hybrid, dense
+claims, native OpenViking and concise Hindsight, with and without OpenAI Decisions
+reranking, plus lexical/chunk/verbose controls: forty configurations in total.
+[candidate.py](candidate.py) evaluates the selected actual application separately;
+[current_baseline.py](current_baseline.py) preserves the old production path.
+
+Every experimental variant implements the same interface in [types.py](types.py). Preparation
 receives only original messages, not benchmark questions, gold or selected
 evidence. Search receives a question and trusted chat/time scope. Memory hits
 identify their originating chat and original message IDs. The common harness
@@ -150,7 +167,7 @@ claim or human certification. Save predictions, tool traces, criterion reasons,
 usage and manifests under ignored `evals/runs/memory/`. Inspect disputed grades
 against originals rather than silently changing expected answers or criteria.
 
-## Current local evidence
+## Historical development rounds (v1/v2)
 
 The first offline lexical run found all labeled support in its initial top-eight
 reply-aware hits for **34/46 factual retrieval cases (73.9%)**, and some labeled
@@ -171,7 +188,7 @@ This baseline does not meet the requested target.
 The second shared answerer adds bounded neighboring originals, distinguishes
 navigation context from reply evidence, and emphasizes exact names, qualifications
 and complete answers. Every candidate completed all 50 questions without execution
-errors. Latest complete model-grader passes for the current runner are:
+errors. Those earlier complete model-grader passes were:
 
 | Candidate | All 50 | Answerable 48 |
 | --- | --- | --- |
@@ -194,16 +211,18 @@ latencies, source audits, usage and limitations. They are ignored generated
 artifacts, absent from fresh clones. Maintained claims use lexical recall in
 this experiment, so its score does not isolate extraction from retrieval strategy.
 Native Hindsight chunks use 1800-character fragments without LLM extraction or
-observations. Its separate verbose-fact pilot covered only 4066 messages;
-consolidation was cancelled and no full extracted-fact accuracy is claimed.
+observations. That round used only a separate 4066-message verbose-fact pilot; its
+consolidation was cancelled. The later v3 comparison also prepared full verbose
+and concise native facts, with observations excluded; see [the record](RESULTS.md).
 
 All native Hindsight source documents were verified against reconstructed
 originals. The full raw-chunk prefix took 191.57 seconds to prepare; both native
 preparation and native recall recorded zero LLM calls. Embeddings, common answer
-generation and grading still use the authorized OpenAI APIs. Experiment services
-were stopped and removed after completion; their PostgreSQL files, indices and
+generation and grading still use the authorized OpenAI APIs. Services for that earlier experiment
+were stopped and removed after its completion; their PostgreSQL files, indices and
 reports persist under `evals/runs/memory/`. Ollama and its model weights were
-also removed. A production backend decision remains separate from this benchmark.
+also removed. The subsequent application choice is recorded in ADR 0004; engine and
+actual production-answer scores remain distinct.
 
 ## Routine checks
 
@@ -217,5 +236,6 @@ docker run --rm -v "$PWD:/app" -w /app \
 Routine tests use synthetic messages, injected embedding/extraction functions,
 AG2 scripted configuration and mocked HTTP. They require no private corpus,
 Telegram access or paid model calls. Run the complete checks after changes;
-preserve their output alongside the evaluation artifacts. The final Docker run
-passed 265 tests, mypy on 85 source files, lint, hygiene and all nine import contracts.
+preserve their output alongside the evaluation artifacts. The application change also runs the full `just check` suite, including strict
+typing, lint, file hygiene, credential scanning, architecture contracts and
+synthetic tests. Final validation counts are recorded with the PR.

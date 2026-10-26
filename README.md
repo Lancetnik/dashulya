@@ -33,12 +33,12 @@ and [Ostrikov's chat](https://t.me/aostrikov_agents_chat)
 
 - **Talk in private.** Keep the current conversation in context, with a fresh
   start whenever you send `/clear`.
-- **Find earlier discussions.** Search an imported chat-history snapshot and
-  return original messages with Telegram links and surrounding replies.
-- **Remember new group messages.** Save received messages and edits locally,
-  then index them in OpenViking for recall through the same memory tool.
-- **Follow memories back to their sources.** Search original messages,
-  discussion extracts, and source-backed summaries or facts through one tool.
+- **Find earlier discussions.** Recall saved originals by keywords and meaning,
+  with original Telegram links and surrounding replies.
+- **Save received messages.** Persist group messages from all participants and
+  the owner's private messages, including edits and successfully delivered replies.
+- **Inspect original history.** Read full sources, page through saved messages,
+  resolve sender identities and count literal matches independently of embeddings.
 - **Keep track of groups.** List groups the bot has observed, preserving the
   registry across restarts.
 
@@ -48,11 +48,21 @@ Try questions such as:
 >
 > Who was considering reusing Osinara for a bot with custom skills?
 
-Memory combines an imported snapshot with new group messages received while the
-bot is running. OpenViking provides semantic retrieval and generated summaries,
-with original messages preserved locally as evidence. Pending messages are
-indexed in the background; retries survive container restarts. Historical
-backfill, deletion synchronization and web search are not implemented.
+Memory uses canonical SQLite originals, BM25 keyword search and cached dense
+embeddings over messages with their reply parents. An imported snapshot is
+optional. Groups can recall only their own chat, across topics; the owner's
+private conversation can recall all saved chats. Imported archives need an
+explicit numeric chat binding before a group can access them.
+
+Embedding preparation runs in the background after an initial startup attempt;
+completed vectors and pending message revisions survive restarts. Original
+history reads remain available during embedding outages. A semantic-query
+failure is reported through the tool rather than silently claiming a complete
+search. Historical backfill, maintained-fact writes/corrections, deletion
+synchronization, full memory continuity across group migrations and web search
+are not implemented. The [comparison record](evals/suites/memory/RESULTS.md)
+separates engine comparisons from actual application validation;
+[ADR 0004](docs/adr/0004-select-source-hybrid-memory.md) records the selected variant.
 
 ## Commands
 
@@ -103,7 +113,8 @@ messages identified by the requester. Target-selection logs retain the requested
 ID, effective ID, selection reason and available context IDs; they omit reply text.
 
 Private conversation history lasts until a bot restart or `/clear`. The
-known-group registry and group-message journal persist between restarts.
+known-group registry, saved originals and embedding cache persist between restarts.
+`/clear` resets private reply context; it does not erase saved chat memory.
 
 Formatted replies use Telegram Rich Messages for Markdown emphasis, source
 links, headings, lists, tables, quotes, code, and collapsible `<details>` sections.
@@ -120,9 +131,9 @@ remain in UTC.
 
 ## Getting started
 
-You need Docker with Compose, a Telegram bot token, an OpenAI API key, and an
-imported memory corpus. Run commands from the project root. OpenViking is the
-agent's required memory backend.
+You need Docker with Compose, a Telegram bot token and an OpenAI API key.
+Run commands from the project root. The agent can start with an empty local
+journal; an imported corpus and OpenViking service are optional.
 
 ### 1. Configure the application
 
@@ -136,45 +147,44 @@ Fill in these values:
 BOT_TOKEN=your_bot_token
 OWNER_USER_ID=your_numeric_telegram_user_id
 OPENAI_API_KEY=your_openai_api_key
-OPENVIKING_API_KEY=your_local_service_key
 ```
 
 Create a bot through [@BotFather](https://t.me/BotFather). Use your numeric
-Telegram user ID for `OWNER_USER_ID`. Generate the local service key with
-`openssl rand -hex 32`. The existing local setup already has credentials.
-Your `.env` stays out of Git and the Docker build context. Model, timezone and
-host-side memory paths are listed in [.env.example](.env.example).
+Telegram user ID for `OWNER_USER_ID`. The existing local setup already has
+credentials. Your `.env` stays out of Git and the Docker build context. The reply
+and addressing models default to `gpt-6-luna`; model, timezone and local storage
+settings are listed in [.env.example](.env.example).
 
-### 2. Prepare the required memory
+### 2. Choose optional imported evidence
 
-The current local setup has a completed OpenViking import of 379 messages.
-`MEMORY_PATH` and `OPENVIKING_MANIFEST` must reference its matching SQLite
-index and import manifest. Exports and indices are local files, so a fresh
-clone needs its own corpus before the agent can start.
+Skip this step to start with newly received messages. To retain an existing
+SQLite evidence index, place it at `var/agent/evidence.sqlite3`. Compose mounts
+`MEMORY_DIRECTORY` (default `./var/agent`) read-only at `/memory` and sets the
+container's `MEMORY_PATH` to `/memory/evidence.sqlite3`. No completed OpenViking
+import or manifest is required. A malformed existing index still fails startup.
 
-To prepare a new corpus, follow the [memory guide](docs/design/chat-memory.md)
-and [OpenViking import guide](evals/suites/openviking/README.md). Offline import
-commands use Python 3.12–3.14 and [uv](https://docs.astral.sh/uv/). Start only the
-memory service while importing:
+For a custom host `MEMORY_PATH` from an earlier deployment, set
+`MEMORY_DIRECTORY` to that file's parent directory and ensure the index is named
+`evidence.sqlite3` there; preserve the original if making a copy. Compose no
+longer uses the host `MEMORY_PATH` as a single-file mount. Direct Python runs
+continue to use `MEMORY_PATH` normally.
 
-```sh
-docker compose up -d --wait openviking
-```
+Set `MEMORY_IMPORT_CHAT_ID` only after verifying the archive's actual numeric
+Telegram chat ID. Without this trusted binding, the archive is available only
+in the owner's private conversation; a matching public username does not grant
+access to a group. See the [memory guide](docs/design/chat-memory.md).
 
-The agent requires a verified import and a reachable OpenViking service.
-Startup fails explicitly when either is missing. FTS5 is available only as an
-offline comparison baseline.
-
-### 3. Start both services
+### 3. Start the agent
 
 ```sh
 docker compose up -d --build --wait
 ```
 
-The agent starts after OpenViking becomes healthy, verifies the imported corpus
-and its Telegram identity, then starts polling. Docker's agent health check
-reflects this startup readiness. The agent reaches OpenViking at
-`http://openviking:1933`; host import tools use `http://127.0.0.1:1933` by default.
+Startup initializes local originals and the vector cache, attempts pending
+embedding preparation, verifies the Telegram bot identity and starts polling.
+Embedding errors leave canonical history available and indexing queued for retry.
+Docker's agent health check reflects completed startup, rather than complete
+embedding coverage.
 
 Open the bot in Telegram and send `/start`, then a message. Inspect and stop the
 stack with:
@@ -185,11 +195,24 @@ docker compose logs -f agent
 docker compose down
 ```
 
-The [Compose file](docker-compose.yaml) mounts the evidence database and manifest
-read-only. Active evidence, the group registry and live messages persist under
-`var/agent/`; OpenViking uses `var/openviking/`, and logs use `var/logs/`. These
-local files survive container recreation and are excluded from Git. Credentials,
-chat history, logs and developer tools are excluded from the agent image.
+The [Compose file](docker-compose.yaml) persists the group registry, live
+originals and vectors under `var/agent/`, and logs under `var/logs/`. Imported
+SQLite evidence is read-only. These local files survive container recreation
+and are excluded from Git. Credentials, chat history, logs and developer tools
+are excluded from the agent image.
+
+The optional `openviking` Compose profile preserves legacy maintenance access
+and existing `var/openviking/` state. Set a nonempty `OPENVIKING_API_KEY` before
+starting it explicitly:
+
+```sh
+docker compose --profile openviking up -d --wait openviking
+```
+
+Its port stays bound to loopback (`http://127.0.0.1:1933` by default). The default
+agent does not depend on this service or its key. The optional service refuses
+to start without its key. Follow the [legacy import guide](evals/suites/openviking/README.md)
+for maintenance of an existing OpenViking corpus.
 
 Compose bind-mounts `./src` read-only at `/app/src`. `PYTHONPATH` makes these host
 sources take precedence over the installed package in the image. After editing
@@ -201,12 +224,13 @@ For recording ordinary group messages and name-based addressing, make the bot
 an administrator, or
 [disable privacy mode](https://core.telegram.org/bots/features#privacy-mode)
 through @BotFather and re-add the bot. Telegram does not deliver other bots'
-messages to it. All received group participants' messages are indexed; replies and commands
-remain restricted to the owner. Private conversations are not added to chat
-memory. Text, captions and basic attachment metadata are retained; attachment
-contents are not downloaded. Coverage and provenance belong to each local
-dataset under `evals/datasets/`. The [memory ADR](docs/adr/0001-openviking-memory.md)
-records the pilot's decision and limitations.
+messages to it. All received group participants' messages are saved, alongside
+owner-private messages and delivered replies; commands and replies remain
+restricted to the owner. Text, captions and basic attachment metadata are
+retained; attachment contents are not downloaded. Coverage and provenance belong
+to each local dataset under `evals/datasets/`. The [original memory ADR](docs/adr/0001-openviking-memory.md)
+records an 18-query historical pilot, not a full-corpus quality result or the
+final decision for the current comparison.
 
 ## Development
 

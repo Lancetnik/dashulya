@@ -236,6 +236,10 @@ class MemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.coverage["message_count"], 7)
         self.assertTrue((await self.memory.search("retained"))["hits"])
 
+    async def test_legacy_offline_index_explicitly_rejects_chat_selection(self) -> None:
+        with self.assertRaisesRegex(ValueError, "does not support chat selection"):
+            await self.memory.search("PostgreSQL", chat="telegram:-100123")
+
 
 class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_ag2_tool_roundtrip_reads_local_evidence_without_model_or_network(

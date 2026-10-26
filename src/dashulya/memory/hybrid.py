@@ -10,8 +10,8 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from dashulya.domain.memory import OriginalMessage
 from dashulya.memory._workers import run_in_thread
-from dashulya.memory.history import OriginalMessage
 from dashulya.memory.ranking import reciprocal_rank_fusion, select_source_diverse
 
 _QUERY_CANDIDATES = 160

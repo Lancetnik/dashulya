@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -22,6 +23,66 @@ class MemoryMessage:
     update_id: int = 0
     username: str | None = None
     is_bot: bool | None = None
+
+
+@dataclass(frozen=True)
+class OriginalMessage:
+    collection: str
+    chat_id: int | None
+    message_id: int
+    text: str
+    sent_at: datetime | None
+    author_id: int | None
+    author: str
+    chat_title: str
+    chat_username: str | None
+    topic_id: int | None
+    reply_to_id: int | None
+    edited_at: str | None
+    media_type: str | None
+    url: str | None
+    provenance: str
+    archive_key: str | None = None
+    username: str | None = None
+    is_bot: bool | None = None
+
+    @property
+    def source_id(self) -> str:
+        key = hashlib.sha256(self.collection.encode()).hexdigest()[:24]
+        return f"source:{key}:{self.message_id}"
+
+    @property
+    def order(self) -> tuple[str, str, int]:
+        instant = self.sent_at.isoformat(timespec="microseconds") if self.sent_at else ""
+        return instant, self.collection, self.message_id
+
+    def render(self, *, offset: int = 0, max_chars: int = 1200) -> dict[str, Any]:
+        end = min(len(self.text), offset + max_chars)
+        return {
+            "source_id": self.source_id,
+            "message_id": self.message_id,
+            "chat": self.collection,
+            "chat_id": self.chat_id,
+            "chat_title": self.chat_title,
+            "chat_username": self.chat_username,
+            "topic_id": self.topic_id,
+            "text": self.text[offset:end],
+            "sent_at": self.sent_at.isoformat() if self.sent_at else None,
+            "author_id": self.author_id,
+            "author": self.author,
+            "reply_to_message_id": self.reply_to_id,
+            "edited_at": self.edited_at,
+            "media_type": self.media_type,
+            "is_bot": self.is_bot,
+            "username": self.username,
+            "url": self.url,
+            "provenance": self.provenance,
+            "archive_key": self.archive_key,
+            "offset": offset,
+            "text_length": len(self.text),
+            "truncated": offset != 0 or end < len(self.text),
+            "next_offset": end if end < len(self.text) else None,
+        }
 
 
 class MessageRecorder(Protocol):
@@ -49,6 +110,7 @@ class MemoryBackend(Protocol):
         query: str = "",
         *,
         memory_id: str | None = None,
+        chat: str | None = None,
         author_id: int | None = None,
         after: str | None = None,
         before: str | None = None,
@@ -82,6 +144,7 @@ class HistoryReader(Protocol):
         action: str = "list",
         *,
         text_contains: str = "",
+        name_contains: str | None = None,
         case_sensitive: bool = False,
         author_id: int | None = None,
         after: str | None = None,

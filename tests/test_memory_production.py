@@ -57,6 +57,7 @@ class ScriptedBackend:
         query: str = "",
         *,
         memory_id: str | None = None,
+        chat: str | None = None,
         author_id: int | None = None,
         after: str | None = None,
         before: str | None = None,
@@ -65,6 +66,7 @@ class ScriptedBackend:
         self.calls.append({
             "query": query,
             "memory_id": memory_id,
+            "chat": chat,
             "author_id": author_id,
             "after": after,
             "before": before,

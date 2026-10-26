@@ -8,11 +8,12 @@ from collections import OrderedDict
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from dashulya.domain.memory import MemoryAccess, MemoryBackend
+from dashulya.domain.memory import MemoryAccess, MemoryBackend, OriginalMessage
 from dashulya.memory._workers import run_in_thread
-from dashulya.memory.history import CanonicalHistory, OriginalMessage
+from dashulya.memory.history import CanonicalHistory
 from dashulya.memory.hybrid import HybridMemory, embedding_texts
 from dashulya.memory.live import LiveMemory
 from dashulya.memory.search import MemorySearch
@@ -173,6 +174,33 @@ class HybridChatMemory:
             self._engines.clear()
 
 
+def _history_before(value: str | None, after: str | None) -> str | None:
+    """Translate recall's inclusive upper bound to canonical history's exclusive one."""
+    if value is None:
+        return None
+    upper = datetime.fromisoformat(value)
+    if upper.utcoffset() is None:
+        error_message = "Search dates must include a timezone."
+        raise ValueError(error_message)
+    if after is not None:
+        lower = datetime.fromisoformat(after)
+        if lower.utcoffset() is None:
+            error_message = "Search dates must include a timezone."
+            raise ValueError(error_message)
+        if lower > upper:
+            error_message = "after must not be later than before."
+            raise ValueError(error_message)
+    try:
+        upper = upper.astimezone(UTC)
+    except OverflowError:
+        error_message = "Search date is outside the supported UTC range."
+        raise ValueError(error_message) from None
+    if upper == datetime.max.replace(tzinfo=UTC):
+        # Every representable canonical timestamp satisfies this upper bound.
+        return None
+    return (upper + timedelta(microseconds=1)).isoformat()
+
+
 class _Recall:
     def __init__(self, history: CanonicalHistory, service: HybridChatMemory) -> None:
         self.history = history
@@ -183,6 +211,7 @@ class _Recall:
         query: str = "",
         *,
         memory_id: str | None = None,
+        chat: str | None = None,
         author_id: int | None = None,
         after: str | None = None,
         before: str | None = None,
@@ -192,13 +221,14 @@ class _Recall:
             return await self.history.query(
                 "read",
                 source_id=memory_id,
+                chat=chat,
                 author_id=author_id,
                 after=after,
-                before=before,
+                before=_history_before(before, after),
             )
+        originals = await self.history.originals(chat=chat)
         if not query.strip():
-            return {"hits": [], "coverage": "Search needs a query or returned memory ID."}
-        originals = await self.history.originals()
+            return {"hits": [], "coverage": self.history.coverage(originals)}
         async with self.service.engine(originals) as engine:
             hits = await engine.search(
                 query, author_id=author_id, after=after, before=before, limit=limit
@@ -225,6 +255,7 @@ class _Recall:
             "hits": output,
             "coverage": {
                 **coverage,
+                **self.history.coverage(originals),
                 "complete_history": False,
                 "notice": "Only observed and imported messages are available. Search is bounded; use chat_history for exact counts or original-message scans.",
             },

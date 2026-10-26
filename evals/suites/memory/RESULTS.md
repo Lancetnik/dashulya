@@ -1,11 +1,14 @@
-# Memory benchmark: protocol and provisional evidence
+# Memory benchmark: comparison and production validation
 
-This report records a development-set comparison of chat-memory implementations.
-The matrix, generation repeats and production-profile verification are still in
-progress. The provisional scores below do not select a final winner or establish
-the product specification's 90% acceptance target.
+This suite record preserves the comparison protocol and aggregate development-set
+evidence for chat-memory implementations.
+The owner selected original-message hybrid recall: BM25 plus embeddings.
+The comparison, confirmation generations and actual application runs below are
+separate evidence. The actual application averages 52% in the final full run,
+below both the experiment's 70% and product specification's 90% targets. The
+implementation is reviewable, with deployment pending further quality work.
 
-The reusable runner is under [`evals/suites/memory/`](../../evals/suites/memory/README.md).
+The reusable runner is in [this suite](README.md).
 Private source messages, questions, annotations, predictions and detailed traces
 remain outside version control. This report contains aggregate evidence only.
 
@@ -39,7 +42,8 @@ Protocol v3 freezes source, queries, annotations, code and configuration before
 comparing the matrix. A changed answerer or input requires a new run identity.
 Manifests retain package/model versions, preparation fingerprints, timings,
 tool traces, token counters and original-source exposure. The model is
-`gpt-6-luna`; dense vectors use `text-embedding-3-small` at 1,536 dimensions.
+`gpt-6-luna`; embeddings use `text-embedding-3-small`. R and C use 512
+dimensions; native engines preserve their recorded preparation configuration.
 The common answerer uses AG2 1.2.1 and the Responses API. R reuses a
 content-addressed vector cache, with SQLite FTS5/BM25 over the same reply-aware
 original-message blocks; cache reuse does not admit later-prefix messages.
@@ -125,54 +129,120 @@ The experiment's 70% target applies to both complete denominators; it is distinc
 from the product specification's 90% target. A retrieval-only or partial-run
 score does not meet an answer-accuracy target.
 
-Finalist selection and two additional answer-generation repeats are pending.
-Two grades of one fixed answer set measure judging variation, not generation
-variation. Final selection must also consider original-source audits, cost and
-latency, followed by a complete run through the actual production candidate's
-agent/provider/dialogue/tool path. The common matrix answerer and the actual
-production profile must be reported separately.
+Two additional answer generations were completed for R and R+C+H with
+Decisions. Two grades of one fixed answer set measure judging variation, not
+generation variation. Every repeat preserves the frozen inputs and reports all
+50 cases; no per-case best answer or grade is selected. The common matrix
+answerer and actual production profile are reported separately.
 
-## Provisional results
+## Frozen comparison results
 
-The following snapshot is provisional. Each number is whole-answer passes out
-of all 50 cases, shown as judge pass 1 / judge pass 2. “Pending” means no complete
-pair of grades is available; it is not a zero or an inferred OSS quality score.
+Every one of the 40 profiles completed all 50 cases and two grading passes.
+Numbers below are whole-answer passes out of 50, shown as judge 1 / judge 2.
 
 | Core components | Without Decisions | With Decisions |
 | --- | --- | --- |
 | R | 41 / 40 | 39 / 36 |
 | C | 37 / 38 | 39 / 36 |
-| O | Pending | Pending |
+| O | 35 / 32 | 34 / 37 |
 | H | 36 / 37 | 38 / 39 |
 | R+C | 35 / 37 | 40 / 40 |
-| R+O | Pending | Pending |
+| R+O | 36 / 37 | 40 / 39 |
 | R+H | 40 / 40 | 30 / 34 |
-| C+O | Pending | Pending |
+| C+O | 34 / 33 | 39 / 40 |
 | C+H | 37 / 40 | 38 / 39 |
-| O+H | Pending | Pending |
-| R+C+O | Pending | Pending |
+| O+H | 39 / 36 | 33 / 38 |
+| R+C+O | 38 / 38 | 38 / 39 |
 | R+C+H | 37 / 36 | 41 / 42 |
-| R+O+H | Pending | Pending |
-| C+O+H | Pending | Pending |
-| R+C+O+H | Pending | Pending |
+| R+O+H | 36 / 37 | 40 / 40 |
+| C+O+H | 38 / 39 | 36 / 39 |
+| R+C+O+H | 34 / 34 | 36 / 38 |
 
 | Additional control | Without Decisions | With Decisions |
 | --- | --- | --- |
 | Raw lexical | 41 / 38 | 34 / 31 |
 | Lexical claims | 33 / 30 | Not scheduled |
 | R + lexical claims | 39 / 37 | Not scheduled |
-| Hindsight chunks | 27 / 29 | Pending |
-| R + Hindsight chunks | Pending | Pending |
-| Hindsight verbose facts | Pending | Pending |
+| Hindsight chunks | 27 / 29 | 28 / 31 |
+| R + Hindsight chunks | 36 / 39 | 37 / 36 |
+| Hindsight verbose facts | 33 / 36 | 37 / 37 |
 
-For R, the corresponding answerable-case results are 39/48 and 38/48. Independent
+For the initial R generation, the answerable-case results are 39/48 and 38/48. Independent
 agent audits inspected all 50 cases and all 125 requirements for R and R+C with
 Decisions, checking canonical original support and exposure rather than treating
 the judges as ground truth. They found respectively 45 supported passes, one
 borderline case and four failures; and 43 supported passes, four borderline cases
 and three failures. These audits are **not human review**, and they do not replace
-or silently overwrite the saved model grades. Selection and generation repeats
-remain unfinished.
+or silently overwrite the saved model grades. The R+C+H+Decisions audit
+separately found 41 supported passes, three borderline cases and six failures.
+All three audits inspected source attribution, exposure, cutoff and scope.
+
+## Confirmation generations and selection
+
+| Component profile | Generation 1 | Generation 2 | Generation 3 | Mean of all six grades |
+| --- | --- | --- | --- | --- |
+| R | 41 / 40 | 37 / 38 | 38 / 37 | 231/300 (77.0%) |
+| R+C+H+Decisions | 41 / 42 | 39 / 37 | 37 / 39 | 235/300 (78.3%) |
+
+The difference is less than one question per generation and does not establish
+statistical superiority. The owner explicitly selected R for the application:
+local canonical originals, content-addressed vectors, fewer services and direct
+handling of edits. This choice is recorded in [ADR 0004](../../../docs/adr/0004-select-source-hybrid-memory.md).
+The production candidate requires its own validation; the 77% number belongs to
+the common comparison answerer, not the deployed bot.
+
+## Actual application validation
+
+The replacement application was evaluated through the real `AgentProvider`,
+`Dialogue`, `HybridChatMemory`, `search_memory` and `chat_history`, using the
+production persona, model configuration, original request and observed reply
+context. No evaluation answer prompt was substituted. Trusted experiment-local
+chat/bot IDs are explicitly synthetic. The historical request uses only its
+eligible prefix. Telegram delivery and the access/addressing classifier are not
+invoked by this offline answer evaluation.
+
+The current historical OpenViking application path was also run on all 50 cases
+with its original factory/prompt/tool path, separately from the common O profile.
+The only evaluation normalizer extracts count/abstention metadata from the already
+saved answer; it sees no sources or gold and requires verbatim answer witnesses.
+It cannot change reply text, citations or factual content.
+
+| Actual application profile | Judge 1 | Judge 2 | Execution failures / 50 |
+| --- | --- | --- | --- |
+| Previous OpenViking production path | 15/50 | 13/50 | 0 |
+| Hybrid integration v1, earlier prompt | 11/50 | 11/50 | 0 |
+| Hybrid integration v2, fuller grounding instructions | 25/50 | 23/50 | 0 |
+| Hybrid integration v3, medium reasoning | 31/50 | 28/50 | 0 |
+| Hybrid integration v4, initial recall | 27/50 | Not run | 1 |
+| **Selected implementation v5, reviewed timeout/date-boundary fixes** | **25/50** | **27/50** | **0** |
+
+V5's mean is **52%**, with answerable-case passes 23/48 and 26/48. Median answer
+time was 19.71s and p95 was 57.50s; its 50 answers made 101 memory searches
+(including initial recall) and 39 direct-history calls. These are one generation
+with two judge passes. They do not establish generation-level stability.
+The common R answerer's 77% must not be presented as this application's score.
+The actual application **does not meet the experiment's 70% target**, nor the
+PRD's 90% target. Deployment and acceptance remain pending quality work.
+
+V4 preserved a stale `automatic_initial_search=false` manifest field despite
+observed recall in all 50 traces; v5 fixes this field without rewriting earlier
+artifacts. Its one timed-out answer remains a failure in the denominator. The
+old report crashed on that failure's missing timing field; 27/50 is the aggregate
+of 49 saved semantic grades plus that execution failure, not a complete official
+report or a successful-run subset. The final evaluator records failure timing
+and reports absent legacy timings explicitly; it does not replace failed answers.
+The v5 source/answering/grading snapshot is preserved before this report-only fix.
+
+A separate grade-blind agent audit read all v4 raw replies and all 125 criteria:
+30 passes, four borderline cases and 16 failures; criterion results were 102
+supported, five borderline and 18 failed. It checked 6,715 exposed original
+objects with no canonical-text, scope, cutoff or citation-exposure mismatch,
+and independently verified both exact counts. This is an agent audit, not human
+certification. The principal application gap is answer completeness and grounding:
+omitted qualifications, guessed model/unit expansions and reversed participant
+roles. It is not evidence that retrieved original text or chat authority may be
+relaxed. All saved intermediate runs remain available; no per-case result or
+favorable generation was selected for the final score.
 
 ## Native-engine preparation evidence and limits
 
@@ -204,10 +274,19 @@ live profile attributed 81.5% of samples to this copy path. Embedding drain slow
 to about two records/s after summaries finished. Paired copied-SQLite tests did
 not support database auto-vacuum as the cause.
 
-A proposed preparation-only workaround increases the existing waiter's polling
-interval, preserving source bytes, summaries, model settings, vectors and recall.
-Its application, resulting throughput and restoration must be recorded before
-claiming a completed O result. Such a run must be labeled as the native retrieval
-baseline with a **poll-only preparation workaround**, not an unmodified end-to-end
-native timing measurement. Production services have not been modified by these
-experiments.
+With explicit user approval, the active preparation waiter's polling interval
+was changed from 50ms to 10s. Source bytes, summary content, model settings,
+vectors and recall were unchanged. Embedding drain increased from about 1.8 to
+24 records/s; all 132,584 native embedding jobs completed without native
+requeues/errors. Both prefix imports completed and all canonical leaves were
+reconciled. Audits parsed all 41,342 generated abstracts and 41,342 overviews
+without empty content, decoding errors or native fallback markers. Eight
+overviews contained unresolved sample-navigation links; these are not used as
+canonical citations. Answering restored concurrency four and restarted the
+isolated service, removing the waiter-local intervention.
+
+O results are a native retrieval baseline with a **poll-only preparation
+workaround**, not an unmodified end-to-end native timing measurement. Full-import
+telemetry reports 30,989 processing seconds but 8,681 monotonic duration seconds
+across a host sleep gap; these definitions must not be conflated. The running
+production services were not modified by these experiments.

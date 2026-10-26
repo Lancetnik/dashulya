@@ -84,10 +84,19 @@ class AgentProvider(Provider):
 
     @provide
     def dialogue(
-        self, agent: Agent[Reply], settings: Settings, history: ChatHistory, bot: Bot
+        self,
+        agent: Agent[Reply],
+        settings: Settings,
+        history: ChatHistory,
+        bot: Bot,
+        memory: ChatMemoryService,
     ) -> Dialogue:
         return Dialogue(
-            agent, timezone=settings.bot_timezone, history=history, bot_id=bot.id
+            agent,
+            timezone=settings.bot_timezone,
+            history=history,
+            bot_id=bot.id,
+            memory=memory,
         )
 
     @provide

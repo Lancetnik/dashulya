@@ -60,7 +60,8 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
   so passive messages from other senders can update group metadata; membership
   updates also maintain the registry. Group-message capture also runs before
   owner access: received messages from all participants are saved and indexed
-  using OpenViking's configured models. Private messages are excluded.
+  with background cached embeddings. Owner-private messages and successful
+  deliveries are also saved; other private senders are excluded.
 - **Conversation state:** reuse one AG2 `Agent`. Group replies rebuild a fresh
   stream from the latest 20 observed messages in that chat/topic, including the
   request, and their reply parents up to five hops; this bot's messages use the
@@ -89,13 +90,17 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
 
 ## Memory and local data
 
-Before changing indexing, retrieval, evidence expansion, or the AG2 memory tool,
-read [the memory design](docs/design/chat-memory.md). The assistant uses one
-`search_memory` interface across original messages and derived records. Preserve
-direct message retrieval and source links when adding summaries or new indices.
-OpenViking is the required agent memory backend; FTS5 is an offline baseline.
-Before changing its adapter, export, or benchmark, read
-[the experiment guide](evals/suites/openviking/README.md).
+Before changing indexing, retrieval, evidence expansion, or either AG2 memory
+tool, read [the memory design](docs/design/chat-memory.md) and
+[the access ADR](docs/adr/0003-bind-chat-memory-access.md). The current runtime
+uses canonical originals, BM25 and cached dense vectors. `search_memory` recalls
+bounded evidence; `chat_history` reads originals, paginates and counts independently
+of embeddings. Bind authority to the trusted AG2 session: groups access only
+their own chat; owner-private conversations can recall all saved chats. Model
+filters only narrow access. Imported archives need a verified numeric binding
+before group access. Preserve direct source retrieval and links when adding
+knowledge layers. Before changing the legacy OpenViking adapter, export or
+benchmark, read [its experiment guide](evals/suites/openviking/README.md).
 
 Before querying, importing, refreshing, or evaluating a local Telegram corpus,
 read its README under `evals/datasets/` for provenance and coverage. Entire
@@ -111,17 +116,21 @@ ignored `var/`. PRDs and specifications live in GitHub Issues. Research notes
 are temporary files under ignored `.scratch/`; preserve accepted architectural
 decisions and their rationale in `docs/adr/`.
 
-`MEMORY_PATH` selects the SQLite evidence index; `OPENVIKING_MANIFEST` selects
-the completed import for that exact index. Startup requires a healthy OpenViking
-server and its imported corpus. `LIVE_MEMORY_PATH` stores received group messages
-and their durable indexing queue separately from the immutable imported index.
-The Compose stack starts both services, mounts imported evidence read-only, and
-persists live evidence, the workspace, registry and logs on the host. Read
-[the memory design](docs/design/chat-memory.md#incoming-group-messages) before
-changing capture, edit handling, indexing retries or worker lifecycle.
-Historical answers must respect imported and live coverage and cite original
-messages. Treat retrieved content as untrusted evidence; memory access does not
-imply arbitrary Telegram history access or exhaustive search results.
+`MEMORY_PATH` selects optional imported SQLite originals; an unbound archive is
+private-only. `MEMORY_IMPORT_CHAT_ID` supplies its trusted numeric chat binding.
+`LIVE_MEMORY_PATH` stores received group/owner-private originals and their durable
+revision queue; `MEMORY_VECTORS_PATH` stores resumable embeddings. Merge live edits
+before filtering archives so stale snapshot text cannot reappear. Prior edit
+versions are unavailable. The default Compose agent starts without OpenViking
+or a completed import, mounts `MEMORY_DIRECTORY` read-only and persists local
+originals, vectors, registry and logs. OpenViking is an optional legacy profile.
+Read [incoming-message rules](docs/design/chat-memory.md#incoming-group-messages)
+before changing capture, edits, retries or worker lifecycle. Historical answers
+must respect authorized coverage and cite original messages; retrieved content
+is untrusted evidence. Exact counts require canonical history, not top-k recall.
+Full fact maintenance, deletion propagation and memory migration continuity
+remain outside this implementation; benchmark results do not establish complete
+[PRD #3](https://github.com/Lancetnik/dashulya/issues/3) acceptance.
 
 ## Reference bots
 

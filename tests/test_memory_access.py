@@ -49,6 +49,7 @@ class _Recall:
         query: str = "",
         *,
         memory_id: str | None = None,
+        chat: str | None = None,
         author_id: int | None = None,
         after: str | None = None,
         before: str | None = None,
@@ -58,6 +59,7 @@ class _Recall:
             "read" if memory_id else "list",
             text_contains=query,
             source_id=memory_id,
+            chat=chat,
             author_id=author_id,
             after=after,
             before=before,
@@ -371,3 +373,50 @@ class MemoryAccessIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Sender is bot: true", rendered)
         self.assertNotIn("Foreign secret", rendered)
         self.assertEqual(config.calls, [])
+
+    async def test_model_chat_narrowing_and_identity_lookup_are_real_tool_parameters(
+        self,
+    ) -> None:
+        await self.live.record(
+            MemoryMessage(
+                GROUP,
+                2,
+                "A body unrelated to the username",
+                NOW - timedelta(seconds=1),
+                11,
+                "Distinct name",
+                "Group",
+                username="distinct_handle",
+            )
+        )
+        container, config = self.container(
+            ToolCallEvent(
+                "search_memory",
+                arguments=json.dumps({"query": "source", "chat": f"telegram:{GROUP}"}),
+            ),
+            ToolCallEvent(
+                "chat_history",
+                arguments=json.dumps({
+                    "action": "authors",
+                    "chat": f"telegram:{GROUP}",
+                    "name_contains": "@DISTINCT_HANDLE",
+                }),
+            ),
+            reply_json("Done"),
+        )
+        agent = await container.get(Agent[Reply])
+        stream = MemoryStream()
+        await agent.ask(
+            "Question", stream=stream, dependencies={MemoryAccess: MemoryAccess(42, True)}
+        )
+        results = await self.results(stream)
+        first = results[0].result
+        self.assertNotIn("Foreign secret", str(first))
+        self.assertNotIn("Private secret", str(first))
+        lookup = results[1].result
+        self.assertIn("distinct_handle", str(lookup))
+        self.assertIn("Distinct name", str(lookup))
+        self.assertNotIn("Foreign secret", str(lookup))
+        schemas = [asdict(schema) for schema in config.calls[0].tools]
+        self.assertIn("chat", schemas[0]["function"]["parameters"]["properties"])
+        self.assertIn("name_contains", schemas[1]["function"]["parameters"]["properties"])

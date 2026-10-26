@@ -84,8 +84,28 @@ class CandidateProductionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["answer"]["cited_message_ids"], [1])
         self.assertEqual(
             [t["tool"] for t in result["trace"]],
-            ["production_group_context", "search_memory", "chat_history", "chat_history"],
+            [
+                "production_group_context",
+                "search_memory",
+                "search_memory",
+                "chat_history",
+                "chat_history",
+            ],
         )
+        self.assertEqual(result["trace"][1]["arguments"]["query"], "Question")
+        self.assertEqual(result["trace"][1]["arguments"]["limit"], 8)
+        self.assertEqual(result["trace"][2]["arguments"]["query"], "PostgreSQL")
+        for call in result["trace"][1:3]:
+            self.assertTrue(call["result"]["hits"])
+            for hit in call["result"]["hits"]:
+                for evidence in hit["sources"]:
+                    original = self.archive.get(evidence["message_id"], self.context)
+                    assert original is not None
+                    offset = evidence.get("offset", 0)
+                    self.assertEqual(
+                        evidence["text"],
+                        original.text[offset : offset + len(evidence["text"])],
+                    )
         self.assertEqual(result["trace"][-1]["result"]["count"], 3)
         self.assertEqual(result["seen_source_ids"], [1, 2, 3])
         self.assertNotIn("Future secret", json.dumps(result))
@@ -94,6 +114,7 @@ class CandidateProductionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(access.chat_id, -1)
         self.assertFalse(access.is_private)
         self.assertTrue(result["production"]["chat_id_is_experiment_local"])
+        self.assertTrue(result["production"]["automatic_initial_search"])
         self.assertIn("total", result["usage"])
         self.assertTrue(result["trace"][0]["result"]["messages"][1]["is_bot"])
 
@@ -140,11 +161,19 @@ class CandidateProductionTests(unittest.IsolatedAsyncioTestCase):
                 reply_json("Done"),
             )
         )
-        result = await session.answer(
-            request.text,
-            config,
-            input_context={"preceding_messages": [{"id": 3, "text": ""}]},
-        )
+        with (
+            patch.object(service, "recall", wraps=service.recall) as recall,
+            patch.object(service, "history", wraps=service.history) as history,
+        ):
+            result = await session.answer(
+                request.text,
+                config,
+                input_context={"preceding_messages": [{"id": 3, "text": ""}]},
+            )
+        access = config.calls[0].dependencies[MemoryAccess]
+        self.assertIs(recall.call_args.args[0], access)
+        self.assertIs(history.call_args.args[0], access)
+        self.assertEqual(result["trace"][1]["arguments"]["query"], request.text)
         self.assertFalse(result["production"]["synthetic_request"])
         self.assertEqual(
             result["production"]["current_request"]["user_id"], request.user_id

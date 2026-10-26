@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from dashulya.domain.memory import MemoryAccess, MemoryMessage
 from dashulya.memory.live import LiveMemory
@@ -166,3 +166,121 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.embed.side_effect = RuntimeError("embedding unavailable")
         with self.assertRaises(RuntimeError):
             await self.service.start(require_ready=True)
+
+    async def test_private_chat_selection_applies_before_engine_creation_and_cap(
+        self,
+    ) -> None:
+        for chat, text in (
+            (-1001, "needle one"),
+            (-1002, "needle two"),
+            (42, "needle private"),
+        ):
+            await self.live.record(self.message(chat, text))
+        await self.service.refresh_once()
+        private = self.service.recall(MemoryAccess(42, True))
+        with patch.object(self.service, "engine", wraps=self.service.engine) as engine:
+            result = await private.search("needle", chat="telegram:-1002", limit=1)
+        self.assertEqual(
+            {m.collection for m in engine.call_args.args[0]}, {"telegram:-1002"}
+        )
+        self.assertEqual(len(result["hits"]), 1)
+        self.assertEqual(result["hits"][0]["sources"][0]["chat_id"], -1002)
+        coverage = result["coverage"]
+        self.assertEqual(coverage["available_messages"], 1)
+        self.assertEqual(coverage["first_saved_at"], NOW.isoformat())
+        self.assertEqual(coverage["last_saved_at"], NOW.isoformat())
+        self.assertEqual(
+            {p["chat"] for p in coverage["known_periods"]}, {"telegram:-1002"}
+        )
+        with self.assertRaisesRegex(ValueError, "outside"):
+            await self.service.recall(MemoryAccess(-1001, False)).search(
+                "needle", chat="telegram:-1002"
+            )
+        with self.assertRaisesRegex(ValueError, "Unknown saved chat"):
+            await private.search("needle", chat="telegram:-100999")
+
+    async def test_direct_id_honors_narrowed_chat_and_history_coverage_matches_search(
+        self,
+    ) -> None:
+        await self.live.record(self.message(-1001, "needle first"))
+        await self.live.record(self.message(-1002, "needle second"))
+        await self.service.refresh_once()
+        access = MemoryAccess(42, True)
+        history = self.service.history(access)
+        source = (await history.query(chat="telegram:-1001"))["messages"][0]
+        recall = self.service.recall(access)
+        wrong = await recall.search(memory_id=source["source_id"], chat="telegram:-1002")
+        self.assertEqual(wrong["messages"], [])
+        selected = await recall.search("needle", chat="telegram:-1001")
+        canonical = (await history.query(chat="telegram:-1001"))["coverage"]
+        self.assertEqual({key: selected["coverage"][key] for key in canonical}, canonical)
+
+    async def test_source_expansion_preserves_inclusive_recall_upper_bound(self) -> None:
+        await self.live.record(self.message(-1001, "needle boundary"))
+        await self.live.record(
+            replace(
+                self.message(-1001, "needle later", number=2),
+                sent_at=NOW + timedelta(microseconds=1),
+            )
+        )
+        await self.service.refresh_once()
+        access = MemoryAccess(-1001, False)
+        history = self.service.history(access)
+        recall = self.service.recall(access)
+        result = await recall.search("needle", before=NOW.isoformat())
+        self.assertEqual(len(result["hits"]), 1)
+        source_id = result["hits"][0]["memory_id"]
+        for upper in (NOW.isoformat(), "2026-10-25T03:00:00+03:00"):
+            with self.subTest(before=upper):
+                expanded = await recall.search(memory_id=source_id, before=upper)
+                self.assertEqual([m["message_id"] for m in expanded["messages"]], [1])
+        later = (await history.query())["messages"][-1]["source_id"]
+        self.assertEqual(
+            (await recall.search(memory_id=later, before=NOW.isoformat()))["messages"],
+            [],
+        )
+        # The separate canonical-history API retains its exclusive before bound.
+        self.assertEqual(
+            (await history.query("count", before=NOW.isoformat()))["count"], 0
+        )
+        with self.assertRaisesRegex(ValueError, "after must not be later"):
+            await recall.search(
+                memory_id=source_id,
+                after=(NOW + timedelta(microseconds=1)).isoformat(),
+                before=NOW.isoformat(),
+            )
+
+    async def test_source_expansion_accepts_maximum_upper_bound_without_widening_scope(
+        self,
+    ) -> None:
+        await self.live.record(self.message(-1001, "needle boundary"))
+        await self.live.record(
+            replace(
+                self.message(-1001, "needle future", number=2),
+                sent_at=NOW + timedelta(microseconds=1),
+            )
+        )
+        history = self.service.history(MemoryAccess(-1001, False))
+        sources = (await history.query())["messages"]
+        cutoff = MemoryAccess(-1001, False, before=NOW, before_id=2)
+        recall = self.service.recall(cutoff)
+        maximum = datetime.max.replace(tzinfo=UTC).isoformat()
+        included = await recall.search(memory_id=sources[0]["source_id"], before=maximum)
+        self.assertEqual([m["message_id"] for m in included["messages"]], [1])
+        excluded = await recall.search(memory_id=sources[1]["source_id"], before=maximum)
+        self.assertEqual(excluded["messages"], [])
+
+    async def test_source_expansion_rejects_naive_and_unrepresentable_utc_bounds(
+        self,
+    ) -> None:
+        await self.live.record(self.message(-1001, "needle source"))
+        access = MemoryAccess(-1001, False)
+        original = (await self.service.history(access).query())["messages"][0]
+        source_id = original["source_id"]
+        recall = self.service.recall(access)
+        for upper in (
+            NOW.replace(tzinfo=None).isoformat(),
+            "9999-12-31T23:59:59.999999-01:00",
+        ):
+            with self.subTest(before=upper), self.assertRaises(ValueError):
+                await recall.search(memory_id=source_id, before=upper)

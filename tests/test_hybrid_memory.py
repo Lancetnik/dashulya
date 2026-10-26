@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from operator import itemgetter
 from unittest.mock import patch
 
-from dashulya.memory.history import OriginalMessage
+from dashulya.domain.memory import OriginalMessage
 from dashulya.memory.hybrid import HybridHit, HybridMemory, embedding_texts, query_terms
 from dashulya.memory.ranking import reciprocal_rank_fusion, select_source_diverse
 

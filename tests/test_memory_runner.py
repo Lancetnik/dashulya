@@ -258,6 +258,21 @@ class MemoryRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(summary["threshold_met"])
         self.assertEqual(summary["missing"], ["Q1"])
 
+    def test_failed_prediction_without_timing_still_counts_against_accuracy(self) -> None:
+        self._cache_grade()
+        runner.write_json(
+            self.prediction_path,
+            {"case_id": "Q1", "variant": "raw_lexical", "error": "TimeoutError"},
+        )
+        summary = self._report()
+        self.assertEqual(summary["total_required"], 1)
+        self.assertEqual(summary["accuracy_all"], 0)
+        self.assertFalse(summary["complete"])
+        self.assertFalse(summary["threshold_met"])
+        self.assertEqual(summary["latency_measured"], 0)
+        self.assertEqual(summary["latency_missing"], ["Q1"])
+        self.assertIsNone(summary["median_answer_seconds"])
+
     def test_changed_prediction_or_gold_invalidates_cached_grade(self) -> None:
         for artifact in (self.prediction_path, self.cases):
             with self.subTest(artifact=artifact.name):

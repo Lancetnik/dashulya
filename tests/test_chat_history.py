@@ -142,6 +142,29 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
             112,
         )
 
+    async def test_aggregation_examples_preserve_bodies_blanks_and_bounded_excerpts(
+        self,
+    ) -> None:
+        bodies = {1: "A nonempty original", 2: "", 3: "Длинный текст " * 100}
+        for mid, text in bodies.items():
+            await self.live.record(self.message(mid, text=text))
+        for action in ("count", "authors", "chats"):
+            result = await self.group.query(action)
+            if action == "count":
+                self.assertEqual(result["count"], 3)
+                examples = result["examples"]
+            else:
+                self.assertEqual(result[action][0]["message_count"], 3)
+                examples = result[action][0]["examples"]
+            self.assertEqual([m["message_id"] for m in examples], [1, 2, 3])
+            for example in examples:
+                body = bodies[example["message_id"]]
+                self.assertEqual(example["text"], body[:500])
+                self.assertEqual(example["text_length"], len(body))
+                self.assertEqual(example["truncated"], len(body) > 500)
+            self.assertEqual(examples[1]["text_length"], 0)
+            self.assertEqual(examples[2]["next_offset"], 500)
+
     async def test_utc_after_inclusive_before_exclusive_and_unknown_archive_dates(
         self,
     ) -> None:
@@ -419,3 +442,120 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                 await self.group.query(**arguments)
+
+    async def test_private_chat_selection_exposes_only_known_selected_collection(
+        self,
+    ) -> None:
+        imported = self.imported()
+        await self.live.record(self.message(1, text="Live current group"))
+        await self.live.record(self.message(1, chat_id=OTHER, text="Other chat"))
+        reader = CanonicalHistory(self.live, MemoryAccess(42, True), imported=imported)
+        archive = f"archive:{'a' * 64}"
+        self.assertEqual(len(await reader.originals(chat=archive)), 2)
+        selected = await reader.query(chat=archive)
+        self.assertEqual({m["chat"] for m in selected["messages"]}, {archive})
+        self.assertEqual(selected["coverage"]["available_messages"], 2)
+        self.assertEqual(
+            {p["chat"] for p in selected["coverage"]["known_periods"]}, {archive}
+        )
+        with self.assertRaisesRegex(ValueError, "Unknown saved chat"):
+            await reader.originals(chat="telegram:-100999")
+        with self.assertRaisesRegex(ValueError, "outside"):
+            await self.group.originals(chat=archive)
+
+    async def test_coverage_reports_scoped_saved_imported_bounds_without_global_metadata(
+        self,
+    ) -> None:
+        imported = self.imported()
+        imported.coverage.update(
+            first_message_at="1900-01-01T00:00:00Z",
+            last_message_at="2999-01-01T00:00:00Z",
+        )
+        await self.live.record(self.message(3, sent_at=NOW + timedelta(seconds=1)))
+        await self.live.record(self.message(4, sent_at=NOW + timedelta(days=50)))
+        await self.live.record(
+            self.message(1, chat_id=OTHER, sent_at=NOW - timedelta(days=100))
+        )
+        access = MemoryAccess(GROUP, False, before=NOW + timedelta(seconds=2))
+        reader = CanonicalHistory(
+            self.live, access, imported=imported, import_chat_id=GROUP
+        )
+        coverage = (await reader.query("count"))["coverage"]
+        self.assertEqual(coverage["available_messages"], 3)
+        self.assertEqual(coverage["first_saved_at"], NOW.isoformat())
+        self.assertEqual(
+            coverage["last_saved_at"], (NOW + timedelta(seconds=1)).isoformat()
+        )
+        self.assertEqual(
+            {p["provenance"] for p in coverage["known_periods"]}, {"live", "imported"}
+        )
+        self.assertEqual(
+            {p["chat"] for p in coverage["known_periods"]}, {f"telegram:{GROUP}"}
+        )
+        self.assertNotIn("1900-", str(coverage))
+        self.assertNotIn("2999-", str(coverage))
+        self.assertNotIn(str(OTHER), str(coverage))
+        self.assertFalse(coverage["complete"])
+
+    async def test_name_lookup_matches_unicode_names_usernames_and_preserves_body_predicate(
+        self,
+    ) -> None:
+        for message in (
+            self.message(
+                1, author_id=10, author="Straße", username="old_handle", text="first"
+            ),
+            self.message(
+                2, author_id=10, author="Renamed", username="new_handle", text="second"
+            ),
+            self.message(
+                3, author_id=11, author="Straße", username="other_handle", text="third"
+            ),
+            self.message(
+                4, author_id=12, author="Unrelated", text="Straße in message body"
+            ),
+        ):
+            await self.live.record(message)
+        result = await self.group.query("authors", name_contains="STRASSE")
+        self.assertEqual({a["author_id"] for a in result["authors"]}, {10, 11})
+        author = next(a for a in result["authors"] if a["author_id"] == 10)
+        self.assertEqual(author["names"], ["Renamed", "Straße"])
+        self.assertEqual(author["usernames"], ["new_handle", "old_handle"])
+        self.assertEqual(author["message_count"], 2)
+        username = await self.group.query("authors", name_contains="@OLD_HANDLE")
+        self.assertEqual([a["author_id"] for a in username["authors"]], [10])
+        body = await self.group.query("authors", text_contains="STRASSE")
+        self.assertEqual([a["author_id"] for a in body["authors"]], [12])
+        both = await self.group.query(
+            "count", name_contains="@old_handle", text_contains="second"
+        )
+        self.assertEqual(both["count"], 1)
+
+    async def test_identity_lookup_does_not_learn_future_alias_or_merge_unknown_people(
+        self,
+    ) -> None:
+        await self.live.record(
+            self.message(1, author_id=10, author="Old", username="old_handle")
+        )
+        await self.live.record(
+            self.message(
+                2,
+                author_id=10,
+                author="Future alias",
+                username="future_handle",
+                sent_at=NOW + timedelta(days=1),
+            )
+        )
+        await self.live.record(self.message(3, author_id=None, author="Unknown A"))
+        await self.live.record(self.message(4, author_id=None, author="Unknown B"))
+        reader = CanonicalHistory(
+            self.live, MemoryAccess(GROUP, False, before=NOW + timedelta(seconds=1))
+        )
+        self.assertEqual(
+            (await reader.query("authors", name_contains="future_handle"))["authors"], []
+        )
+        unknown = (await reader.query("authors", name_contains="unknown"))["authors"]
+        self.assertEqual(len(unknown), 2)
+        self.assertTrue(all(a["author_id"] is None for a in unknown))
+        self.assertEqual(
+            (await reader.query("count", name_contains="unknown A"))["count"], 1
+        )

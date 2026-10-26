@@ -11,6 +11,7 @@ from dashulya.domain.memory import MemoryBackend
 async def search_memory(
     query: str = "",
     memory_id: str | None = None,
+    chat: str | None = None,
     author_id: int | None = None,
     after: str | None = None,
     before: str | None = None,
@@ -21,7 +22,9 @@ async def search_memory(
     """Find earlier chat messages by meaning and keywords, with original source links.
 
     Provide a concise query OR a returned memory_id to read its original. Results
-    stay within this conversation's trusted access. author_id and inclusive,
+    stay within this conversation's trusted access. chat optionally narrows to a
+    collection returned by chat_history(action="chats"), including owner-private
+    cross-chat recall; it never grants access. author_id and inclusive,
     timezone-aware ISO after/before filters narrow original evidence. limit is
     1 to 8. sources support each hit; context holds separately labeled replies and
     neighbors, possibly with other authors or dates. Read long sources through
@@ -33,6 +36,7 @@ async def search_memory(
     return await memory.search(
         query,
         memory_id=memory_id,
+        chat=chat,
         author_id=author_id,
         after=after,
         before=before,

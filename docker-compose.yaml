@@ -1,14 +1,11 @@
 services:
   agent:
     build: .
-    depends_on:
-      openviking:
-        condition: service_healthy
     environment:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env}
       OWNER_USER_ID: ${OWNER_USER_ID:?Set OWNER_USER_ID in .env}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
       OPENAI_DECISION_MODEL: ${OPENAI_DECISION_MODEL:-gpt-6-luna}
       BOT_TIMEZONE: ${BOT_TIMEZONE:-Europe/Moscow}
       PYTHONPATH: /app/src
@@ -17,9 +14,8 @@ services:
       LOG_PATH: /var/log/dashulya/dashulya.log
       MEMORY_PATH: /memory/evidence.sqlite3
       LIVE_MEMORY_PATH: /var/lib/dashulya/memory.sqlite3
-      OPENVIKING_MANIFEST: /memory/manifest.json
-      OPENVIKING_URL: http://openviking:1933
-      OPENVIKING_API_KEY: ${OPENVIKING_API_KEY:?Set OPENVIKING_API_KEY in .env}
+      MEMORY_VECTORS_PATH: /var/lib/dashulya/vectors.sqlite3
+      MEMORY_IMPORT_CHAT_ID: ${MEMORY_IMPORT_CHAT_ID:-}
     volumes:
       - type: bind
         source: ./src
@@ -28,28 +24,27 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: ${MEMORY_PATH:-./var/agent/evidence.sqlite3}
-        target: /memory/evidence.sqlite3
+        source: ${MEMORY_DIRECTORY:-./var/agent}
+        target: /memory
         read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${OPENVIKING_MANIFEST:-./var/agent/import/manifest.json}
-        target: /memory/manifest.json
-        read_only: true
-        bind:
-          create_host_path: false
       - ./var/agent:/var/lib/dashulya
       - ./var/logs:/var/log/dashulya
 
   openviking:
+    profiles: [openviking]
     image: ghcr.io/volcengine/openviking:v0.5.2
-    entrypoint: [openviking-server]
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        : "$${OPENVIKING_API_KEY:?Set OPENVIKING_API_KEY for the optional OpenViking service}"
+        exec openviking-server "$$@"
+      - --
     command: [--config, /etc/openviking/ov.conf]
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
-      OPENVIKING_API_KEY: ${OPENVIKING_API_KEY:?Set OPENVIKING_API_KEY in .env}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
+      OPENVIKING_API_KEY: ${OPENVIKING_API_KEY:-}
     ports:
       - "127.0.0.1:${OPENVIKING_PORT:-1933}:1933"
     volumes:

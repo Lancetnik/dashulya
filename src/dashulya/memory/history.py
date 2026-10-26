@@ -8,74 +8,34 @@ invent prior edit versions: it reads the latest canonical live row each time.
 import base64
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 
-from dashulya.domain.memory import MemoryAccess
+from dashulya.domain.memory import MemoryAccess, OriginalMessage
 from dashulya.memory._database import _read_connection
 from dashulya.memory.live import LiveMemory
 from dashulya.memory.search import MemorySearch
 
 
-@dataclass(frozen=True)
-class OriginalMessage:
-    collection: str
-    chat_id: int | None
-    message_id: int
-    text: str
-    sent_at: datetime | None
-    author_id: int | None
-    author: str
-    chat_title: str
-    chat_username: str | None
-    topic_id: int | None
-    reply_to_id: int | None
-    edited_at: str | None
-    media_type: str | None
-    url: str | None
-    provenance: str
-    archive_key: str | None = None
-    username: str | None = None
-    is_bot: bool | None = None
+def _identity(message: OriginalMessage) -> tuple[int | None, str | None, str | None]:
+    # A missing numeric ID does not merge unrelated anonymous participants.
+    return (
+        (message.author_id, None, None)
+        if message.author_id is not None
+        else (None, message.author, message.username)
+    )
 
-    @property
-    def source_id(self) -> str:
-        key = hashlib.sha256(self.collection.encode()).hexdigest()[:24]
-        return f"source:{key}:{self.message_id}"
 
-    @property
-    def order(self) -> tuple[str, str, int]:
-        instant = self.sent_at.isoformat(timespec="microseconds") if self.sent_at else ""
-        return instant, self.collection, self.message_id
-
-    def render(self, *, offset: int = 0, max_chars: int = 1200) -> dict[str, Any]:
-        end = min(len(self.text), offset + max_chars)
-        return {
-            "source_id": self.source_id,
-            "message_id": self.message_id,
-            "chat": self.collection,
-            "chat_id": self.chat_id,
-            "chat_title": self.chat_title,
-            "chat_username": self.chat_username,
-            "topic_id": self.topic_id,
-            "text": self.text[offset:end],
-            "sent_at": self.sent_at.isoformat() if self.sent_at else None,
-            "author_id": self.author_id,
-            "author": self.author,
-            "reply_to_message_id": self.reply_to_id,
-            "edited_at": self.edited_at,
-            "media_type": self.media_type,
-            "is_bot": self.is_bot,
-            "username": self.username,
-            "url": self.url,
-            "provenance": self.provenance,
-            "archive_key": self.archive_key,
-            "offset": offset,
-            "text_length": len(self.text),
-            "truncated": offset != 0 or end < len(self.text),
-            "next_offset": end if end < len(self.text) else None,
-        }
+def _name_matches(message: OriginalMessage, value: str | None) -> bool:
+    if not value:
+        return True
+    needle = value.strip().lstrip("@").casefold()
+    return (
+        needle in message.author.casefold()
+        or needle in (message.username or "").lstrip("@").casefold()
+    )
 
 
 def _date(value: str | None) -> datetime | None:
@@ -256,15 +216,56 @@ class CanonicalHistory:
             for row in records
         ]
 
-    async def originals(self) -> list[OriginalMessage]:
+    async def originals(self, *, chat: str | None = None) -> list[OriginalMessage]:
+        self._chat(chat)
         # Merge before query filters so a live edit cannot uncover a stale snapshot
         # merely because its corrected text no longer matches a substring query.
         merged = {(m.collection, m.message_id): m for m in await self._imported()}
         merged.update({(m.collection, m.message_id): m for m in await self._live()})
+        visible = [m for m in merged.values() if _authorized(m, self.access)]
+        if (
+            chat is not None
+            and self.access.is_private
+            and chat not in {m.collection for m in visible}
+        ):
+            error_message = "Unknown saved chat collection within this access scope."
+            raise ValueError(error_message)
         return sorted(
-            (m for m in merged.values() if _authorized(m, self.access)),
+            (m for m in visible if chat is None or m.collection == chat),
             key=lambda m: m.order,
         )
+
+    def coverage(self, originals: Sequence[OriginalMessage]) -> dict[str, Any]:
+        """Describe only supplied, authorized canonical rows, never global index bounds."""
+        visible = [m for m in originals if _authorized(m, self.access)]
+        dates = [m.sent_at for m in visible if m.sent_at is not None]
+        periods: dict[tuple[str, str], list[OriginalMessage]] = {}
+        for message in visible:
+            periods.setdefault((message.collection, message.provenance), []).append(
+                message
+            )
+        known = []
+        for (collection, provenance), messages in sorted(periods.items()):
+            saved = [m.sent_at for m in messages if m.sent_at is not None]
+            known.append({
+                "chat": collection,
+                "provenance": provenance,
+                "available_messages": len(messages),
+                "first_saved_at": min(saved).isoformat() if saved else None,
+                "last_saved_at": max(saved).isoformat() if saved else None,
+            })
+        return {
+            "complete": False,
+            "available_messages": len(visible),
+            "first_saved_at": min(dates).isoformat() if dates else None,
+            "last_saved_at": max(dates).isoformat() if dates else None,
+            "unknown_timestamps": sum(m.sent_at is None for m in visible),
+            "known_periods": known,
+            "bounds_basis": "Authorized currently available canonical originals, including visible imported rows; endpoints do not establish continuous history.",
+            "note": "Only saved originals are available; coverage may have gaps. No live Telegram fetch occurs.",
+            "deletion_tracking": False,
+            "edit_history": "Latest canonical live versions only; prior edit versions are unavailable.",
+        }
 
     def _chat(self, selector: str | None) -> None:
         if (
@@ -344,6 +345,7 @@ class CanonicalHistory:
         action: str = "list",
         *,
         text_contains: str = "",
+        name_contains: str | None = None,
         case_sensitive: bool = False,
         author_id: int | None = None,
         after: str | None = None,
@@ -385,11 +387,13 @@ class CanonicalHistory:
         if lower is not None and upper is not None and lower > upper:
             error_message = "after must not be later than before."
             raise ValueError(error_message)
-        originals = await self.originals()
+        originals = await self.originals(chat=chat)
+        identities = {_identity(m) for m in originals if _name_matches(m, name_contains)}
         matched = [
             m
             for m in originals
-            if self._matches(
+            if _identity(m) in identities
+            and self._matches(
                 m,
                 text=text_contains,
                 case_sensitive=case_sensitive,
@@ -402,15 +406,10 @@ class CanonicalHistory:
         ]
         result: dict[str, Any] = {
             "action": action,
-            "coverage": {
-                "complete": False,
-                "available_messages": len(originals),
-                "note": "Only saved originals are available; coverage may have gaps. No live Telegram fetch occurs.",
-                "deletion_tracking": False,
-                "edit_history": "Latest canonical live versions only; prior edit versions are unavailable.",
-            },
+            "coverage": self.coverage(originals),
             "filters": {
                 "text_contains": text_contains,
+                "name_contains": name_contains,
                 "case_sensitive": case_sensitive,
                 "author_id": author_id,
                 "after": lower.isoformat() if lower else None,
@@ -421,7 +420,8 @@ class CanonicalHistory:
         }
         if action == "count":
             result.update(
-                count=len(matched), examples=[m.render(max_chars=0) for m in matched[-3:]]
+                count=len(matched),
+                examples=[m.render(max_chars=500) for m in matched[-3:]],
             )
         elif action == "read":
             target = next((m for m in matched if m.source_id == source_id), None)
@@ -462,26 +462,31 @@ class CanonicalHistory:
     def _groups(
         action: str, matched: list[OriginalMessage], offset: int, limit: int
     ) -> dict[str, Any]:
-        grouped: dict[str | int | None, list[OriginalMessage]] = {}
+        grouped: dict[
+            str | tuple[int | None, str | None, str | None], list[OriginalMessage]
+        ] = {}
         for message in matched:
-            key = message.author_id if action == "authors" else message.collection
+            key = _identity(message) if action == "authors" else message.collection
             grouped.setdefault(key, []).append(message)
-        rows = []
-        for key, messages in grouped.items():
+        rows: list[dict[str, Any]] = []
+        for messages in grouped.values():
             if action == "authors":
                 rows.append({
-                    "author_id": key,
+                    "author_id": messages[0].author_id,
                     "names": sorted({m.author for m in messages}),
+                    "usernames": sorted({m.username for m in messages if m.username}),
                     "message_count": len(messages),
+                    "examples": [m.render(max_chars=500) for m in messages[-3:]],
                 })
             else:
                 first = messages[0]
                 rows.append({
-                    "chat": key,
+                    "chat": first.collection,
                     "chat_id": first.chat_id,
                     "title": first.chat_title,
                     "username": first.chat_username,
                     "message_count": len(messages),
+                    "examples": [m.render(max_chars=500) for m in messages[-3:]],
                 })
         return {
             action: rows[offset : offset + limit],

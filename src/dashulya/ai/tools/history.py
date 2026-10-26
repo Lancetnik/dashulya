@@ -11,6 +11,7 @@ from dashulya.domain.memory import HistoryReader
 async def chat_history(
     action: Literal["list", "read", "count", "authors", "chats"] = "list",
     text_contains: str = "",
+    name_contains: str | None = None,
     case_sensitive: bool = False,
     author_id: int | None = None,
     after: str | None = None,
@@ -31,7 +32,10 @@ async def chat_history(
     after is inclusive, before exclusive, both timezone-aware ISO timestamps.
     count counts ALL matching saved originals, including blank records; semantic
     top-k hits cannot establish a count or absence. authors identifies people by
-    numeric ID; chats lists saved source collections, not all Telegram chats.
+    numeric ID. name_contains searches display names and usernames (casefold,
+    optional leading@), returning all matching identities; text_contains always
+    filters original message bodies. authors returns names and usernames.
+    chats lists saved source collections, not all Telegram chats.
     chat can narrow to a returned collection key; it cannot grant access.
     Groups are confined to their own chat, all topics by default. Private owner
     conversations can search every authorized saved chat; topic_id narrows topics.
@@ -47,6 +51,7 @@ async def chat_history(
     return await history.query(
         action,
         text_contains=text_contains,
+        name_contains=name_contains,
         case_sensitive=case_sensitive,
         author_id=author_id,
         after=after,

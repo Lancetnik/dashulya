@@ -75,11 +75,15 @@ class OpenVikingMemory:
         query: str = "",
         *,
         memory_id: str | None = None,
+        chat: str | None = None,
         author_id: int | None = None,
         after: str | None = None,
         before: str | None = None,
         limit: int = 3,
     ) -> dict[str, Any]:
+        if chat is not None:
+            error_message = "This legacy offline backend does not support chat selection."
+            raise ValueError(error_message)
         _, after, before = validate_search(query, memory_id, after, before, limit)
         coverage = dict(self.evidence.coverage)
         if self.live is not None:

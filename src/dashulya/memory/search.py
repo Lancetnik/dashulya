@@ -121,12 +121,16 @@ class MemorySearch:
         query: str = "",
         *,
         memory_id: str | None = None,
+        chat: str | None = None,
         author_id: int | None = None,
         after: str | None = None,
         before: str | None = None,
         limit: int = 3,
     ) -> dict[str, Any]:
         """Search all levels, or expand a returned memory ID, with original evidence."""
+        if chat is not None:
+            error_message = "This legacy offline backend does not support chat selection."
+            raise ValueError(error_message)
         tokens, after, before = validate_search(query, memory_id, after, before, limit)
         expression = " AND ".join(f'"{token}"*' for token in tokens)
         async with _read_connection(self.path) as connection:

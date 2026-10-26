@@ -95,8 +95,12 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         await self.reply((42, None), "Yesterday", sent_at=first)
         await self.reply((42, None), "Today", sent_at=second)
         requests = await self.requests(self.last_stream())
+        self.assertTrue(all("Initial recall:" in request for request in requests))
         self.assertEqual(
-            requests,
+            [
+                request.split("\n\nCurrent request (original):\n", 1)[1]
+                for request in requests
+            ],
             [
                 "Sent at: 24 October 2026 (Saturday) 23:59:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42):\nYesterday",
                 "Sent at: 25 October 2026 (Sunday) 03:05:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42):\nToday",
@@ -182,7 +186,10 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         await self.reply((42, None), "Fresh")
         fresh = self.last_stream()
         self.assertEqual(
-            await self.requests(fresh),
+            [
+                request.split("\n\nCurrent request (original):\n", 1)[1]
+                for request in await self.requests(fresh)
+            ],
             [
                 "Sent at: 25 October 2026 (Sunday) 15:00:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42):\nFresh"
             ],

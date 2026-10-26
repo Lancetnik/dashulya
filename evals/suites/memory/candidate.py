@@ -251,6 +251,7 @@ class _RecordingService:
                 query: str = "",
                 *,
                 memory_id: str | None = None,
+                chat: str | None = None,
                 author_id: int | None = None,
                 after: str | None = None,
                 before: str | None = None,
@@ -262,6 +263,7 @@ class _RecordingService:
                     {
                         "query": query,
                         "memory_id": memory_id,
+                        "chat": chat,
                         "author_id": author_id,
                         "after": after,
                         "before": before,
@@ -467,7 +469,7 @@ class CandidateAnswerSession:
                 "bot_id_is_experiment_local": True,
                 "synthetic_request": not bool(self.context.before_id),
                 "tools": ["search_memory", "chat_history"],
-                "automatic_initial_search": False,
+                "automatic_initial_search": True,
                 "tool_budget": None,
                 "topic_mapping": "No real forum-topic IDs supplied; thread_post_id is not a forum topic.",
             },
@@ -492,7 +494,7 @@ async def run_candidate(args: argparse.Namespace) -> None:
         "production_sha256": fingerprints(),
         "expected_case_ids": [q["case_id"] for q in queries],
         "tools": ["search_memory", "chat_history"],
-        "automatic_initial_search": False,
+        "automatic_initial_search": True,
         "tool_budget": None,
         "reply_timeout_seconds": 90,
         "model_timeout_seconds": 60,
@@ -550,6 +552,7 @@ async def run_candidate(args: argparse.Namespace) -> None:
                         context,
                         timezone=manifest["timezone"],
                     )
+                    started = perf_counter()
                     try:
                         result = await production_result(
                             cast("ProductionAnswerSession", session),
@@ -564,6 +567,7 @@ async def run_candidate(args: argparse.Namespace) -> None:
                             "error": type(error).__name__,
                             "trace": session.trace,
                             "seen_source_ids": sorted(session.seen_sources),
+                            "elapsed_seconds": perf_counter() - started,
                         }
                     if fingerprints() != manifest["production_sha256"]:
                         failure = "Production source changed during candidate evaluation."

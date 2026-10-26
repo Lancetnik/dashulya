@@ -22,39 +22,54 @@ ai/
   agents/
     models.py            Reply/classification model policy
     factory.py           Agent identities, prompts, schemas, and construction
-  tools/memory.py        Memory tool behavior over the async backend interface
+  tools/memory.py        Bounded recall over the async backend interface
+  tools/history.py       Canonical original reads, counts and pagination
+  embeddings.py          Embedding provider/model policy
   dialogue.py            Reply context, conversation history, turn locking, and reset
   addressing.py          Direct-address recognition and classification
   prompts.py             Persona and response instructions
 domain/
   groups.py              Group, GroupRepository, and GroupRegistry
   messages.py            GroupMessage, AddressingDecision, Reply and ConversationKey
-  memory.py              MemoryBackend, MemoryMessage, MessageRecorder and ChatHistory
+  memory.py              MemoryAccess, canonical messages and memory interfaces
 ```
 
 `domain` has no application or infrastructure imports. `GroupRegistry` owns
 observed group migrations, membership changes, and bounded group-list output.
 `storage.groups.GroupStore` implements `GroupRepository` using SQLite. The
 provider aliases that implementation to the domain interface and owns cleanup.
-Memory implementations satisfy the domain's async `MemoryBackend.search`
-interface. FTS5 and evidence reconstruction use read-only `aiosqlite`
-connections; OpenViking recall uses `AsyncHTTPClient`. Backend initialization
-loads SQLite metadata with `await MemorySearch.open(path)`. The tool awaits
-the backend directly and owns no thread scheduling. Indexing and reviewed
-maintenance writes retain synchronous SQLite access in the offline commands.
+`ChatMemoryService` binds application resources to a trusted `MemoryAccess` and
+returns separate `MemoryBackend` recall and `HistoryReader` canonical readers.
+The selected implementation is `HybridChatMemory`, as recorded in
+[ADR 0004](../adr/0004-select-source-hybrid-memory.md).
+Imported evidence metadata is loaded with `await MemorySearch.open(path)`
+when a local index exists. An absent optional index is allowed; an existing
+invalid index or a numeric import binding without evidence fails startup.
 
-`LiveMemory` implements `MessageRecorder` with an asynchronous SQLite write and
-a persisted revision queue. The application-scoped `MemoryProvider` initializes
-it, supplies the same instance to capture and recall, and starts `MemoryIngestion`
-after OpenViking readiness checks. Its async generator cancels and joins the
-worker at shutdown; pending rows survive. Capture waits only for local
-persistence, while the worker owns remote indexing and retries.
-The same instance implements `ChatHistory` for direct recent-message and bounded
-reply-parent selection, independent of indexing readiness. `AgentProvider`
-supplies it and the Telegram bot ID to `Dialogue`. Telegram input and outgoing
-session middleware share the message conversion in `bot/messages.py`; successful
-group deliveries, including command responses, are recorded with Telegram-assigned
-IDs. `TelegramProvider` attaches outgoing capture to the shared bot session.
+`LiveMemory` implements `MessageRecorder` with asynchronous SQLite writes and a
+persisted revision queue. The application-scoped `MemoryProvider` initializes
+it and shares the same instance between capture, canonical history and recall.
+The provider owns the OpenAI embedding client and persistent `EmbeddingCache`;
+`HybridChatMemory` owns background preparation and bounded cached retrieval
+engines. Startup attempts preparation, retaining queued work after provider
+failure. The service cancels and joins its worker, waits for active retrieval
+leases and closes cached SQLite engines before the provider closes its client.
+Completed vector batches and pending revisions survive restarts. Capture waits
+for local persistence, while preparation owns provider calls and retries.
+
+The same journal implements `ChatHistory` for recent-message and bounded
+reply-parent selection independently of embeddings. `AgentProvider` supplies
+it and the Telegram bot ID to `Dialogue`. Input and outgoing session middleware
+share conversion in `bot/messages.py`. Group messages from all participants,
+owner-private messages and successful deliveries are captured with actual
+Telegram-assigned IDs; other private senders are excluded. `TelegramProvider`
+attaches outgoing capture to the shared bot session.
+
+Canonical history uses asynchronous SQLite reads. Hybrid ranking and construction
+run bounded CPU/SQLite work in worker threads; cancellation drains started work
+before releasing its resource lease. Embedding provider calls stay on the owning
+event loop. The injected tools await their readers directly and own no thread
+scheduling. Offline index maintenance retains synchronous SQLite access.
 
 AI factories accept ordinary arguments; tools declare injected dependencies
 with `FromDishka` and the AG2 integration's `@inject`. Model choices, timeouts,
@@ -76,8 +91,8 @@ fallback. Domain messages carry no aiogram objects.
 
 `main/container.py` builds one graph with `AG2Scope`. Application dependencies
 are cached in `APP`: settings, model configurations, both agents, `Dialogue`,
-`GroupAddressing`, the OpenViking memory backend, `GroupStore`, `GroupRegistry`,
-`ReplyDelivery`, the Telegram bot, and the dispatcher. Application resolution
+`GroupAddressing`, `ChatMemoryService`, the vector cache/client, `GroupStore`,
+`GroupRegistry`, `ReplyDelivery`, the Telegram bot, and the dispatcher. Application resolution
 uses an async lock to keep lazy construction unique across concurrent events.
 
 The built-in aiogram integration opens a new `REQUEST` container for each event.
@@ -98,13 +113,21 @@ container rather than the event container, so an AG2 turn opens its session
 without inheriting a Telegram request's lifetime. `Agent[Reply]` and `Agent[bool]`
 distinguish the reply and addressing roles.
 
-`ai/tools/memory.py` registers the memory tool with `@tool` and the standard
-`dishka_ag2.inject` decorator. Its `FromDishka[MemoryBackend]` parameter is
-resolved when AG2 invokes the tool and is excluded from the model-facing schema.
-The reply agent always has the memory tool. Its provider requires the memory
-backend, which validates the local evidence index, completed import, server
-health and remote corpus before agent construction. No runtime FTS5 or
-no-memory mode is registered.
+The reply agent always registers `search_memory` and `chat_history` with `@tool`
+and standard `dishka_ag2.inject`. Their `FromDishka[MemoryBackend]` and
+`FromDishka[HistoryReader]` parameters stay outside the model-facing schema.
+`Dialogue.reply()` passes `MemoryAccess` through trusted AG2 dependencies using
+the conversation's numeric chat identity and original request cutoff. The
+session provider validates that authority, then binds both readers in
+`AG2Scope.SESSION`. Model-provided filters only narrow access. Groups recall
+their own chat; the owner's private conversation can federate saved chats.
+An imported archive needs an explicit numeric binding to become group-visible.
+See [ADR 0003](../adr/0003-bind-chat-memory-access.md).
+
+The shared application agent owns neither a Telegram event container nor an
+unscoped model-facing memory reader. A semantic provider error does not disable
+canonical history. OpenViking, a completed import and an existing vector corpus
+are not prerequisites for agent construction.
 
 `Dialogue` owns chat/topic isolation, original send-time formatting, reply
 deadlines, and serialization with `/clear`. Private streams and conversation
@@ -118,8 +141,8 @@ needed here.
 
 `main.run` closes the container in `finally`, including polling failures,
 cancellation, and partial startup failures. The bot session and group database
-are finalized by their providers. The OpenViking memory backend is shared across
-Telegram and AG2 scopes.
+are finalized by their providers. Memory resources live in the application
+scope; conversation authority and bound readers live in the AG2 session scope.
 
 ## Tests and changes
 
@@ -133,9 +156,10 @@ are exercised through the real AG2 integration.
 `tests/test_dependencies.py` exercises framework scope entry, concurrent AG2
 turns, per-tool finalization, cancellation, production startup, and cleanup.
 Dispatcher tests combine injection with access, tracking, routing, and delivery.
-Memory tests execute the injected tool through real AG2 with scripted or
-mock-transport model responses. They also check that a database lock leaves the
-event loop available and that cancelled HTTP recall closes its client. Search,
+Memory tests execute injected tools through real AG2 with scripted or
+mock-transport model responses. They check scope isolation, edit shadowing,
+pagination/counts, embedding failures and cancellation-safe resource release.
+They also check that a database lock leaves the event loop available. Search,
 expansion, and comparison commands await the same backend interface, with one
 event loop started at the CLI entrypoint. No live Telegram or paid model
 requests are needed.
@@ -148,9 +172,15 @@ and domain/infrastructure modules independent of DI.
 
 ## Container startup
 
-Compose starts the agent after OpenViking is healthy. The runtime resolves the
-required memory backend before accessing Telegram. With `HEALTHCHECK_PATH`
+Compose starts the agent without a memory-service dependency. The runtime
+resolves `ChatMemoryService`, initializing local state and attempting pending
+preparation before accessing Telegram. With `HEALTHCHECK_PATH`
 configured by the image, startup removes any stale readiness marker, verifies
 the Telegram bot identity, and writes the current PID before polling. Shutdown
 removes the marker and closes the container. The health check therefore verifies
 completed startup, not just the existence of a Python process.
+
+The optional `openviking` Compose profile is for legacy maintenance. Its service
+key is checked inside its entrypoint so an inactive profile does not require the
+key during Compose interpolation. Existing workspace state stays mounted and
+the published port remains bound to loopback.

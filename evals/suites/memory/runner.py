@@ -493,7 +493,11 @@ def report(args: argparse.Namespace) -> None:
     factual_required = sum(
         c["answerability"] == "answerable" for c in captured.cases.values()
     )
-    latency = [float(p["elapsed_seconds"]) for p in predictions]
+    latency = [
+        float(p["elapsed_seconds"])
+        for p in predictions
+        if isinstance(p.get("elapsed_seconds"), (int, float))
+    ]
     summary: dict[str, Any] = {
         "run_id": args.run_id,
         "variant": args.variant,
@@ -526,6 +530,12 @@ def report(args: argparse.Namespace) -> None:
             for name, count in required_categories.items()
         },
         "median_answer_seconds": statistics.median(latency) if latency else None,
+        "latency_measured": len(latency),
+        "latency_missing": [
+            p["case_id"]
+            for p in predictions
+            if not isinstance(p.get("elapsed_seconds"), (int, float))
+        ],
         "p95_answer_seconds": sorted(latency)[
             min(len(latency) - 1, int(len(latency) * 0.95))
         ]
