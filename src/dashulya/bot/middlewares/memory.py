@@ -83,6 +83,8 @@ class CaptureSentMessagesMiddleware(BaseRequestMiddleware):
                     update={
                         "message_thread_id": method.message_thread_id
                         or response.message_thread_id,
+                        "is_topic_message": response.is_topic_message
+                        or method.message_thread_id is not None,
                     }
                 ),
                 text=response.text or text,

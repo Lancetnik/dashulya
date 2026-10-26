@@ -95,7 +95,8 @@ Successful decisions distinguish `explicit_mention`, `reply_to_bot` and
 `classifier_accepted`.
 
 Each group reply uses a fresh model stream with the latest 20 observed messages
-in that chat/topic, including the current request, plus their reply parents up
+in the whole ordinary group, or the current real forum topic, including the
+current request, plus their reply parents up
 to five hops. Messages appear once in chronological message order; this bot's
 previously delivered replies use the assistant role. Context reads local originals
 immediately, without waiting for semantic indexing. Missing parents and media

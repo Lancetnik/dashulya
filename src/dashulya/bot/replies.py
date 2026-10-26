@@ -8,6 +8,7 @@ from aiogram.utils.chat_action import ChatActionSender
 
 from dashulya.ai.dialogue import Dialogue
 from dashulya.bot.formatting import render_markdown, rich_message
+from dashulya.bot.messages import conversation_key
 from dashulya.observability import exception_fields
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ class ReplyDelivery:
         *,
         group_context: dict[str, object] | None = None,
     ) -> None:
-        async with self._dialogue.delivery((message.chat.id, message.message_thread_id)):
+        async with self._dialogue.delivery(conversation_key(message)):
             await self._reply(message, group_context=group_context)
 
     async def _reply(
@@ -43,11 +44,13 @@ class ReplyDelivery:
         async with ChatActionSender.typing(
             bot=self._bot,
             chat_id=message.chat.id,
-            message_thread_id=message.message_thread_id,
+            message_thread_id=message.message_thread_id
+            if message.is_topic_message
+            else None,
         ):
             try:
                 reply = await self._dialogue.reply(
-                    (message.chat.id, message.message_thread_id),
+                    conversation_key(message),
                     message.text,
                     user_id=message.from_user.id,
                     user_name=message.from_user.full_name,

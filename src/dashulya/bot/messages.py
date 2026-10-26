@@ -4,6 +4,20 @@ from aiogram.enums import ChatType
 from aiogram.types import Message
 
 from dashulya.domain.memory import MemoryMessage, MessageRecorder
+from dashulya.domain.messages import ConversationKey
+
+
+def conversation_key(message: Message) -> ConversationKey:
+    """Ordinary groups share one conversation; real forum topics stay separate."""
+    topic = (
+        message.message_thread_id
+        if message.is_topic_message or message.chat.type == ChatType.PRIVATE
+        else None
+    )
+    if topic is None and message.chat.is_forum:
+        # General is topic 1 even when Telegram omits a thread ID.
+        topic = 1
+    return message.chat.id, topic
 
 
 async def capture_message(
@@ -63,7 +77,7 @@ async def capture_message(
             author=author,
             chat_title=message.chat.title or message.chat.full_name or "Untitled chat",
             chat_username=message.chat.username,
-            thread_id=message.message_thread_id,
+            thread_id=conversation_key(message)[1],
             reply_to_id=reply_to_id,
             edited_at=datetime.fromtimestamp(message.edit_date, UTC)
             if message.edit_date

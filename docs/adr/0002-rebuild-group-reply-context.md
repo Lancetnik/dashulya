@@ -12,7 +12,14 @@ summarizing unrelated discussions together. Private conversations retain their
 existing in-memory history and `/clear` behavior.
 
 Select the latest 20 observed messages in the same chat/topic up to and including
-the triggering message. For each selected message, follow at most five reply-parent
+the triggering message. In ordinary groups this means the whole chat, including
+previously stored reply threads. Only real forum-topic messages narrow that
+window to a topic: a raw Telegram `message_thread_id` alone does not establish
+one. Use `is_topic_message` to identify a topic; a forum's General topic is 1
+when Telegram omits the thread ID. Share this conversation identity between
+capture, addressing, reply context and turn locks.
+
+For each selected message, follow at most five reply-parent
 edges within that chat/topic. Deduplicate by message identity and order the union
 by Telegram message ID. Supply the triggering message once as the current user
 request; earlier messages authored by this bot's numeric Telegram ID use the

@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,6 +17,8 @@ from aiogram.types import Message, Update, User
 
 from dashulya.ai.agents.factory import create_reply_agent
 from dashulya.ai.dialogue import Dialogue
+from dashulya.bot.messages import conversation_key
+from dashulya.domain.memory import MemoryAccess, MemoryMessage
 from dashulya.domain.messages import Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
@@ -38,7 +41,7 @@ BOT: dict[str, Any] = {
     "username": "dashulya_bot",
 }
 OWNER = {"id": 42, "is_bot": False, "first_name": "Anna"}
-CHAT = {"id": -100123, "type": "supergroup", "title": "Group"}
+CHAT: dict[str, Any] = {"id": -100123, "type": "supergroup", "title": "Group"}
 
 
 class GroupContextTests(PostgresTestCase):
@@ -52,6 +55,7 @@ class GroupContextTests(PostgresTestCase):
         self.bot = Bot("123:TEST")
         self.addAsyncCleanup(self.bot.session.close)
         self.next_id = 0
+        self.chats: dict[int, dict[str, Any]] = {CHAT["id"]: CHAT}
         self.sent: list[Message] = []
         self.requests = AsyncMock(side_effect=self.request)
         for target, name, replacement in (
@@ -92,7 +96,9 @@ class GroupContextTests(PostgresTestCase):
         result = Message.model_validate({
             "message_id": self.next_id,
             "date": int(NOW.timestamp()),
-            "chat": CHAT,
+            "chat": self.chats.get(method.chat_id, CHAT)
+            if isinstance(method.chat_id, int)
+            else CHAT,
             "from": BOT,
             "text": text,
         })
@@ -112,6 +118,7 @@ class GroupContextTests(PostgresTestCase):
             **fields,
         }
         message = Message.model_validate(payload)
+        self.chats[message.chat.id] = message.chat.model_dump(exclude_none=True)
         await self.dispatcher.feed_update(
             self.bot,
             Update.model_validate({"update_id": self.next_id, "message": payload}),
@@ -122,6 +129,120 @@ class GroupContextTests(PostgresTestCase):
         stream = self.ask.call_args.kwargs["stream"]
         assert isinstance(stream, MemoryStream)
         return stream
+
+    async def test_ordinary_group_reply_thread_keeps_twenty_chat_messages_and_parents(
+        self,
+    ) -> None:
+        # Existing rows retain raw thread IDs from the former capture implementation.
+        for number in range(1, 27):
+            await self.store.record(
+                MemoryMessage(
+                    CHAT["id"],
+                    number,
+                    f"Original {number}",
+                    NOW,
+                    99,
+                    "Boris",
+                    "Group",
+                    thread_id=20 if number >= 21 else None,
+                    reply_to_id=1 if number == 26 else None,
+                )
+            )
+        for chat, number, text in [
+            (CHAT["id"], 99, "Future secret"),
+            (-100456, 25, "Foreign secret"),
+        ]:
+            await self.store.record(
+                MemoryMessage(chat, number, text, NOW, 99, "Boris", "Other")
+            )
+        self.next_id = 26
+        trigger = await self.feed(
+            "Dashulya",
+            message_thread_id=20,
+            is_topic_message=False,
+            reply_to_message={
+                "message_id": 26,
+                "date": int(NOW.timestamp()),
+                "chat": CHAT,
+                "from": OWNER,
+                "text": "Original 26",
+                "message_thread_id": 20,
+            },
+            entities=[{"type": "text_mention", "offset": 0, "length": 8, "user": BOT}],
+        )
+        events = await self.stream().history.get_events()
+        inputs = [
+            part.content
+            for event in events
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+            if isinstance(part, TextInput)
+        ]
+        rendered = "\n".join(inputs)
+        self.assertEqual(
+            [
+                int(number)
+                for number in re.findall(r"Telegram message ID: (\d+)", rendered)
+            ],
+            [1, *range(8, 28)],
+        )
+        self.assertNotIn("Future secret", rendered)
+        self.assertNotIn("Foreign secret", rendered)
+        rows = await self.store.originals(MemoryAccess(CHAT["id"], False))
+        self.assertIsNone(
+            next(row for row in rows if row.message_id == trigger.message_id).topic_id
+        )
+
+    async def test_name_addressing_reads_the_same_whole_group_context(self) -> None:
+        await self.feed("Earlier independent message", owner=False)
+        await self.feed(
+            "Earlier reply branch",
+            owner=False,
+            message_thread_id=1,
+            is_topic_message=False,
+        )
+        dialogue = await self.container.get(Dialogue)
+        with patch.object(
+            dialogue, "recent_context", wraps=dialogue.recent_context
+        ) as recent:
+            await self.feed(
+                "Dashulya, what do you think?",
+                message_thread_id=1,
+                is_topic_message=False,
+            )
+        self.assertEqual(recent.call_args.args[0], (CHAT["id"], None))
+        context = await dialogue.recent_context((CHAT["id"], None), through_message_id=3)
+        self.assertEqual(len(context), 2)
+        self.assertIn("Earlier independent message", context[0]["text"])
+        self.assertIn("Earlier reply branch", context[1]["text"])
+        self.ask.assert_not_awaited()
+
+    async def test_forum_general_topic_does_not_read_other_topics(self) -> None:
+        forum = {**CHAT, "is_forum": True}
+        await self.feed(
+            "Other topic secret", owner=False, chat=forum, message_thread_id=7
+        )
+        await self.feed("General discussion", owner=False, chat=forum)
+        trigger = await self.feed(
+            "Dashulya",
+            chat=forum,
+            entities=[{"type": "text_mention", "offset": 0, "length": 8, "user": BOT}],
+        )
+        self.assertEqual(conversation_key(trigger), (CHAT["id"], 1))
+        events = await self.stream().history.get_events()
+        rendered = "\n".join(
+            part.content
+            for event in events
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+            if isinstance(part, TextInput)
+        )
+        self.assertIn("General discussion", rendered)
+        self.assertNotIn("Other topic secret", rendered)
+        saved = await self.store.context(
+            (CHAT["id"], 1), self.next_id, limit=20, parent_hops=5
+        )
+        self.assertEqual(saved[-1].message_id, self.sent[-1].message_id)
 
     async def test_passive_messages_and_delivered_bot_reply_reach_next_fresh_turn(
         self,

@@ -110,8 +110,14 @@ content. Capture commits local evidence before command routing, independent of
 remote indexing readiness. `/clear` resets the private conversation stream;
 it does not erase persistent originals or their vectors.
 
-The same canonical table, including imported originals, supplies immediate group reply context: the latest 20 messages
-in that chat/topic through the request, plus their ancestors up to five hops.
+The same canonical table, including imported originals, supplies immediate group
+reply context: the latest 20 messages in the whole ordinary group through the
+request, plus their ancestors up to five hops. A real forum topic narrows both
+seeds and parents to that topic. Ordinary reply threads never split this window;
+old rows with raw thread IDs remain eligible without rewriting originals.
+The Telegram adapter shares one `conversation_key()` between capture, addressing
+and reply serialization; topic selection uses `is_topic_message`, with a forum's
+General topic normalized to 1 when no explicit thread ID is available.
 Each reply uses a fresh stream, with this bot's previous messages assigned the
 assistant role. This selection is separate from historical memory access; see
 [the reply-context ADR](../adr/0002-rebuild-group-reply-context.md).

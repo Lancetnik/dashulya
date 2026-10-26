@@ -362,7 +362,8 @@ class AIHandlerTests(PostgresTestCase):
         self.assertEqual(self.dialogue.reply.await_count, 3)
         key = self.dialogue.recent_context.call_args.args[0]
         context = json.loads(self.decision_agent.ask.call_args.args[0])["current_message"]
-        self.assertEqual(key, (-123, 7))
+        self.assertEqual(key, (-123, None))
+        self.assertEqual(self.dialogue.reply.call_args.args[0], key)
         self.assertEqual(context["text"], "DASHULYA, help")
         self.assertEqual(context["sender_id"], 42)
 

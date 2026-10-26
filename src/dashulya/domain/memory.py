@@ -92,6 +92,8 @@ class MessageRecorder(Protocol):
 
 
 class ChatHistory(Protocol):
+    """Immediate context: no topic selects a whole chat; a topic narrows it."""
+
     async def context(
         self,
         key: ConversationKey,

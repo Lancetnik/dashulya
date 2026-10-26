@@ -209,11 +209,12 @@ class MessageStore:
         limit: int,
         parent_hops: int,
     ) -> list[MemoryMessage]:
+        """None selects the whole chat, including legacy ordinary reply threads."""
         async with self.database.connection() as connection:
             cursor = await connection.execute(
                 """WITH RECURSIVE recent AS (
                     SELECT message_id FROM messages WHERE chat_id=%(chat)s
-                        AND topic_id IS NOT DISTINCT FROM %(topic)s::bigint
+                        AND (%(topic)s::bigint IS NULL OR topic_id=%(topic)s)
                         AND message_id<=%(through)s AND sent_at IS NOT NULL
                         ORDER BY message_id DESC LIMIT %(limit)s
                 ), ancestors(message_id,depth) AS (
@@ -222,7 +223,8 @@ class MessageStore:
                     JOIN messages child ON child.chat_id=%(chat)s AND child.message_id=a.message_id
                     JOIN messages parent ON parent.collection=child.collection
                         AND parent.message_id=child.reply_to_id
-                    WHERE a.depth<%(hops)s AND parent.topic_id IS NOT DISTINCT FROM %(topic)s::bigint
+                    WHERE a.depth<%(hops)s
+                        AND (%(topic)s::bigint IS NULL OR parent.topic_id=%(topic)s)
                         AND parent.message_id<child.message_id AND parent.sent_at IS NOT NULL
                 ) SELECT m.* FROM messages m WHERE chat_id=%(chat)s
                     AND message_id IN (SELECT message_id FROM ancestors) ORDER BY message_id""",

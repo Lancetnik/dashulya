@@ -8,6 +8,7 @@ from dishka.integrations.aiogram import FromDishka, inject
 
 from dashulya.ai.addressing import GroupAddressing
 from dashulya.ai.dialogue import Dialogue
+from dashulya.bot.messages import conversation_key
 from dashulya.bot.replies import ReplyDelivery
 from dashulya.domain.messages import GroupMessage
 from dashulya.observability import exception_fields
@@ -62,7 +63,7 @@ async def group_chat(
     failure_reason = "context_error"
     try:
         recent = await dialogue.recent_context(
-            (message.chat.id, message.message_thread_id),
+            conversation_key(message),
             through_message_id=message.message_id,
         )
         failure_reason = "classifier_error"
@@ -97,7 +98,7 @@ async def group_chat(
 
 @inject
 async def clear(message: Message, dialogue: FromDishka[Dialogue]) -> None:
-    await dialogue.clear((message.chat.id, message.message_thread_id))
+    await dialogue.clear(conversation_key(message))
     await message.answer("Conversation cleared. Let's start fresh 💋")
 
 
