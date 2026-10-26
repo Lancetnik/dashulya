@@ -123,10 +123,12 @@ assistant role. This selection is separate from historical memory access; see
 [the reply-context ADR](../adr/0002-rebuild-group-reply-context.md).
 
 `ai/group_context.py` formats both reply and addressing context. One shared users
-roster replaces repeated names, handles and bot flags. Local day and UTC-offset
-headings apply to compact `id`, `sender`, `time`, `text` and optional `reply_to` /
-`attachment` entries. Text is JSON-quoted to preserve escapes and multiline
-content without creating metadata fields. Unknown handles are omitted; unknown
+roster uses `id: name (@username, bot, self)`, omitting unavailable values.
+Local day and UTC-offset headings apply to JSON-array message rows. The shared
+header declares `[id,sender,time,text,reply_to?,attachment?]` once; absent trailing
+fields are omitted, with null preserving a missing field before a later value.
+JSON encoding preserves escapes and multiline content without creating rows.
+Unknown handles are omitted; unknown
 numeric senders receive separate local references. The roster is an extra
 metadata input, while each original retains its user/assistant API role and
 only original message IDs can become reply targets.

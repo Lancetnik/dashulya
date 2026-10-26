@@ -1,5 +1,4 @@
 import asyncio
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -30,6 +29,7 @@ from tests.support import (
     MemoryOverride,
     ModelOverrides,
     RecorderOverride,
+    group_rows,
     reply_json,
 )
 
@@ -180,10 +180,7 @@ class GroupContextTests(PostgresTestCase):
         ]
         rendered = "\n".join(inputs)
         self.assertEqual(
-            [
-                int(number)
-                for number in re.findall(r"^- id: (\d+)$", rendered, flags=re.MULTILINE)
-            ],
+            [row[0] for row in group_rows(rendered)],
             [1, *range(8, 28)],
         )
         self.assertNotIn("Future secret", rendered)
@@ -279,12 +276,13 @@ class GroupContextTests(PostgresTestCase):
             if isinstance(part, TextInput)
         ]
         self.assertIn("We were discussing cats", "\n".join(requests))
-        self.assertIn('99: "Boris', requests[0])
-        self.assertIn("reply_to: 3", requests[-1])
+        self.assertIn("99: Boris", requests[0])
+        self.assertEqual(group_rows(requests[-1])[-1][4], 3)
         earlier_bot = [
             event
             for event in events
-            if isinstance(event, ModelResponse) and "- id: 3" in (event.content or "")
+            if isinstance(event, ModelResponse)
+            and any(row[0] == 3 for row in group_rows(event.content or ""))
         ]
         self.assertEqual(len(earlier_bot), 1)
         self.assertEqual(earlier_bot[0].to_api()["role"], "assistant")

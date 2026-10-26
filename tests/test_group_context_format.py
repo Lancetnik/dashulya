@@ -1,4 +1,3 @@
-import json
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -6,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from dashulya.ai.group_context import format_group_context
 from dashulya.domain.memory import MemoryMessage
+from tests.support import group_rows
 
 
 class GroupContextFormatTests(unittest.TestCase):
@@ -58,17 +58,22 @@ class GroupContextFormatTests(unittest.TestCase):
         self.assertEqual(joined.count("Europe/Moscow (UTC+03:00)"), 1)
         self.assertEqual(joined.count("25 October 2026 (Sunday)"), 1)
         self.assertEqual(joined.count("26 October 2026 (Monday)"), 1)
-        self.assertIn('123: "Dashulya (bot, self)"', rendered[0]["text"])
-        self.assertIn("  reply_to: 2", rendered[-1]["text"])
-        self.assertIn("  time: 00:01:00", rendered[-1]["text"])
-        encoded = next(
-            line.strip()[6:]
-            for line in rendered[-1]["text"].splitlines()
-            if line.strip().startswith("text: ")
-        )
-        self.assertEqual(json.loads(encoded), body)
+        self.assertIn("123: Dashulya (bot, self)", rendered[0]["text"])
         self.assertIn(
-            'attachment: "document" (contents unavailable)', rendered[-1]["text"]
+            "messages: [id,sender,time,text,reply_to?,attachment?]", rendered[0]["text"]
+        )
+        self.assertEqual(
+            group_rows(rendered[1]["text"]), [[1, 42, "23:59:00", "Original"]]
+        )
+        row = group_rows(rendered[-1]["text"])[0]
+        self.assertEqual(row, [3, 42, "00:01:00", body, 2, "document"])
+
+    def test_attachment_without_reply_uses_one_null_and_no_other_optional_placeholders(
+        self,
+    ) -> None:
+        rendered = self.render([replace(self.message(1, ""), media_type="sticker")])
+        self.assertEqual(
+            group_rows(rendered[1]["text"]), [[1, 42, "23:59:00", "", None, "sticker"]]
         )
 
     def test_unknown_people_are_not_merged_or_given_invented_handles_or_bot_flags(
@@ -98,13 +103,13 @@ class GroupContextFormatTests(unittest.TestCase):
             ),
         ]
         header = self.render(messages)[0]["text"]
-        self.assertIn('unknown_1: "Anonymous\\nusers:"', header)
-        self.assertIn('unknown_2: "Anonymous\\nusers:"', header)
-        self.assertIn('99: "Other bot (@helper, bot)"', header)
+        self.assertIn("unknown_1: Anonymous\\nusers:", header)
+        self.assertIn("unknown_2: Anonymous\\nusers:", header)
+        self.assertIn("99: Other bot (@helper, bot)", header)
         self.assertNotIn("username: unknown", header)
         self.assertNotIn("None", header)
 
-    def test_aliases_and_conflicting_bot_flags_remain_visible_under_one_numeric_identity(
+    def test_aliases_remain_visible_without_classifying_conflicting_bot_flags(
         self,
     ) -> None:
         header = self.render([
@@ -114,7 +119,8 @@ class GroupContextFormatTests(unittest.TestCase):
         self.assertEqual(header.count("- 42:"), 1)
         self.assertIn("Alice / Alicia", header)
         self.assertIn("@alice, @new_alice", header)
-        self.assertIn("bot status conflicting", header)
+        self.assertNotIn(", bot", header)
+        self.assertNotIn("not bot", header)
 
     def test_offset_heading_changes_when_dst_repeats_a_local_hour(self) -> None:
         rendered = format_group_context(

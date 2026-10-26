@@ -37,15 +37,11 @@ def _users(messages: Sequence[MemoryMessage], bot_id: int | None) -> str:
             details.extend(["bot", "self"])
         elif flags == {True}:
             details.append("bot")
-        elif flags == {False}:
-            details.append("not bot")
-        elif flags:
-            details.append("bot status conflicting")
         label = " / ".join(names)
         if details:
             label += " (" + ", ".join(details) + ")"
-        # Quote names and handles so participant text cannot create new fields.
-        lines.append(f"- {sender}: {json.dumps(label, ensure_ascii=False)}")
+        # Keep the human-readable roster on one physical line per identity.
+        lines.append(f"- {sender}: {json.dumps(label, ensure_ascii=False)[1:-1]}")
     return "\n".join(lines)
 
 
@@ -71,19 +67,21 @@ def format_group_context(
             lines.append(f"{local:%d %B %Y (%A)}")
         if previous_day is None:
             result[0]["text"] += "\n\n" + "\n".join(lines)
-            lines = []
-        lines.append(f"- id: {message.message_id}")
-        if message.reply_to_id is not None:
-            lines.append(f"  reply_to: {message.reply_to_id}")
-        lines.extend([
-            f"  sender: {_sender(message)}",
-            f"  time: {local:%H:%M:%S}",
-            f"  text: {json.dumps(message.text, ensure_ascii=False)}",
-        ])
-        if message.media_type:
-            lines.append(
-                f"  attachment: {json.dumps(message.media_type, ensure_ascii=False)} (contents unavailable)"
+            result[0]["text"] += (
+                "\n\nmessages: [id,sender,time,text,reply_to?,attachment?]"
             )
+            lines = []
+        row: list[int | str | None] = [
+            message.message_id,
+            _sender(message),
+            local.strftime("%H:%M:%S"),
+            message.text,
+        ]
+        if message.reply_to_id is not None or message.media_type:
+            row.append(message.reply_to_id)
+        if message.media_type:
+            row.append(message.media_type)
+        lines.append(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
         result.append({
             "role": "assistant"
             if bot_id is not None and message.author_id == bot_id

@@ -1,4 +1,5 @@
 import json
+from typing import Any
 from unittest.mock import AsyncMock
 
 from ag2 import Agent
@@ -21,6 +22,11 @@ from dashulya.domain.memory import (
 
 def reply_json(text: str, reply_to_message_id: int | None = None) -> str:
     return json.dumps({"text": text, "reply_to_message_id": reply_to_message_id})
+
+
+def group_rows(text: str) -> list[list[Any]]:
+    """Read context data rows while ignoring shared roster/calendar headings."""
+    return [json.loads(line) for line in text.splitlines() if line.startswith("[")]
 
 
 class RecorderOverride(Provider):

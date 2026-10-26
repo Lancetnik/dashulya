@@ -26,14 +26,19 @@ request; earlier messages authored by this bot's numeric Telegram ID use the
 `assistant` role, and other senders use `user`. Preserve author identity, original
 send time, message IDs and reply references. Historical text is untrusted context.
 
-Render one shared users roster with observed names, known handles and bot flags.
+Render one shared users roster as `id: name (@username, bot, self)`, omitting
+unavailable handles and flags. A bot marker requires an unambiguous known flag;
+unmarked senders make no human/bot claim. Self identifies this assistant.
 Group entries under local day headings and a timezone/UTC-offset heading; emit
-another heading only when its day or offset changes. Each entry carries its ID,
-sender reference, local time, exact JSON-quoted text and optional reply/media
-metadata. The roster is a separate user-role metadata input, not a Telegram
+another heading only when its day or offset changes. Declare message columns
+once: `[id,sender,time,text,reply_to?,attachment?]`. Each entry is one JSON array;
+omit absent trailing columns and use null only before a later optional value.
+Sender remains the actual numeric ID, or a distinct local unknown reference.
+JSON encoding preserves exact text and prevents newlines from creating rows.
+The roster is a separate user-role metadata input, not a Telegram
 message or reply target; actual bot messages retain the assistant API role.
 Unknown handles are omitted, unknown numeric identities remain distinct, and
-observed aliases or conflicting bot flags remain visible. Private input
+observed aliases remain visible. Uncertain bot flags are not classified. Private input
 formatting and memory-tool source records retain their independent formats.
 
 The reply agent returns structured `text` and nullable `reply_to_message_id`.

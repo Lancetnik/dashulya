@@ -15,7 +15,13 @@ from dashulya.domain.memory import ChatHistory, MemoryMessage
 from dashulya.domain.messages import ConversationKey, Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
-from tests.support import TEST_API_KEY, MemoryOverride, ModelOverrides, reply_json
+from tests.support import (
+    TEST_API_KEY,
+    MemoryOverride,
+    ModelOverrides,
+    group_rows,
+    reply_json,
+)
 
 SENT_AT = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 
@@ -294,8 +300,8 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         stream = self.last_stream()
         request = (await self.requests(stream))[-1]
         self.assertIn("25 October 2026 (Sunday)", "\n".join(await self.requests(stream)))
-        self.assertIn("time: 15:00:00", request)
-        self.assertIn("reply_to: 1", request)
+        self.assertEqual(group_rows(request)[-1][2], "15:00:00")
+        self.assertEqual(group_rows(request)[-1][4], 1)
         events = list(await stream.history.get_events())
         assert isinstance(events[1], ModelResponse)
         self.assertEqual(events[1].to_api()["role"], "assistant")
@@ -364,8 +370,8 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(events[3], ModelRequest)
             requests = await self.requests(stream)
             self.assertIn("Passive participant", requests[1])
-            self.assertIn("reply_to: 1", requests[1])
-            self.assertIn('attachment: "animation" (contents unavailable)', requests[2])
+            self.assertEqual(group_rows(requests[1])[0][4], 1)
+            self.assertEqual(group_rows(requests[2])[0][5], "animation")
             self.assertEqual(len(requests), 4)
             self.assertEqual(requests[-1].count(f"Request {number}"), 1)
             if number == 11:
