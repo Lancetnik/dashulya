@@ -1,6 +1,5 @@
 import asyncio
 import json
-import unittest
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,13 +16,15 @@ from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.memory.ingestion import MemoryIngestion
 from dashulya.memory.live import LiveMemory
+from tests.postgres import PostgresTestCase
 from tests.support import TEST_API_KEY, BotOverride, DialogueOverride, RecorderOverride
 
 NOW = datetime(2026, 10, 25, 12, tzinfo=UTC)
 
 
-class LiveMemoryTests(unittest.IsolatedAsyncioTestCase):
+class LiveMemoryTests(PostgresTestCase):
     async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / "live.sqlite3"
@@ -327,7 +328,6 @@ class LiveMemoryTests(unittest.IsolatedAsyncioTestCase):
                     bot_token=bot.token,
                     openai_api_key=TEST_API_KEY,
                     owner_user_id=42,
-                    database_path=self.path.parent / "groups.sqlite3",
                 ),
                 BotOverride(bot),
                 RecorderOverride(recorder),

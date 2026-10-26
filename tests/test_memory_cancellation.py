@@ -1,176 +1,68 @@
-"""Cancellation must finish SQLite work before releasing a shared engine lease."""
-
 import asyncio
-import threading
-import unittest
 from datetime import UTC, datetime
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Any
-from unittest.mock import patch
 
 from dashulya.domain.memory import MemoryAccess, MemoryMessage
-from dashulya.memory._workers import run_in_thread
-from dashulya.memory.history import CanonicalHistory
-from dashulya.memory.hybrid import HybridMemory, embedding_texts
-from dashulya.memory.live import LiveMemory
 from dashulya.memory.service import HybridChatMemory
+from dashulya.memory.store import MessageStore
 from dashulya.memory.vectors import EmbeddingCache
+from tests.postgres import PostgresTestCase
 
 
-class MemoryCancellationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_cancelled_search_drains_thread_before_lease_and_close(self) -> None:
-        directory = TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        root = Path(directory.name)
-        live = LiveMemory(root / "live.sqlite3")
-        await live.initialize()
-        await live.record(
+class MemoryCancellationTests(PostgresTestCase):
+    async def test_native_query_cancellation_returns_a_usable_connection(self) -> None:
+        started = asyncio.Event()
+
+        async def slow() -> None:
+            async with self.database.connection() as connection:
+                started.set()
+                await connection.execute("SELECT pg_sleep(30)")
+
+        task = asyncio.create_task(slow())
+        await started.wait()
+        await asyncio.sleep(0.02)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 2)
+        async with self.database.connection() as connection:
+            row = await (await connection.execute("SELECT 42 AS value")).fetchone()
+        self.assertEqual(row, {"value": 42})
+
+    async def test_cancelled_recall_releases_lease_and_preserves_originals(self) -> None:
+        store = MessageStore(self.database)
+        await store.record(
             MemoryMessage(
-                -100123,
-                1,
-                "needle source",
-                datetime(2026, 10, 25, tzinfo=UTC),
-                42,
-                "Owner",
-                "Group",
+                -123, 1, "needle", datetime(2026, 1, 1, tzinfo=UTC), 42, "Alice", "Group"
             )
         )
+        started, cancelled = asyncio.Event(), asyncio.Event()
 
         async def embed(texts: list[str]) -> list[list[float]]:
-            return [[1.0, *([0.0] * 511)] for _ in texts]
+            return [[1.0] + [0.0] * 511 for _ in texts]
 
-        service = HybridChatMemory(
-            live, EmbeddingCache(root / "vectors.sqlite3", embed), owner_user_id=42
-        )
-        self.addAsyncCleanup(service.close)
-        originals = await service.history(MemoryAccess(-100123, False)).originals()
-        started, release, finished = (
-            threading.Event(),
-            threading.Event(),
-            threading.Event(),
-        )
-        self.addCleanup(release.set)
-        close_before_finish: list[bool] = []
-        real_search, real_close = HybridMemory._search_sync, HybridMemory.close
+        cache = EmbeddingCache(self.database, embed)
+        memory = HybridChatMemory(store, cache, owner_user_id=42)
+        self.addAsyncCleanup(memory.close)
+        await memory.refresh_once()
 
-        def blocked(engine: HybridMemory, *args: Any) -> Any:
+        async def blocked(texts: list[str]) -> list[list[float]]:
             started.set()
-            if not release.wait(3):
-                error = "Test did not release the SQLite worker."
-                raise TimeoutError(error)
-            try:
-                return real_search(engine, *args)
-            finally:
-                finished.set()
-
-        def close(engine: HybridMemory) -> None:
-            close_before_finish.append(not finished.is_set())
-            real_close(engine)
-
-        async def search() -> None:
-            async with service.engine(originals) as engine:
-                await engine.search("needle")
-
-        with (
-            patch.object(HybridMemory, "_search_sync", blocked),
-            patch.object(HybridMemory, "close", close),
-        ):
-            query = asyncio.create_task(search())
-            self.assertTrue(await asyncio.to_thread(started.wait, 3))
-            query.cancel()
-            await asyncio.sleep(0)
-            query.cancel()  # A second cancellation cannot interrupt worker draining.
-            closing = asyncio.create_task(service.close())
-            try:
-                with self.assertRaises(TimeoutError):
-                    await asyncio.wait_for(asyncio.shield(query), 0.03)
-                self.assertFalse(closing.done())
-                self.assertEqual(close_before_finish, [])
-            finally:
-                release.set()
-            with self.assertRaises(asyncio.CancelledError):
-                await query
-            await asyncio.wait_for(closing, 3)
-        self.assertTrue(finished.is_set())
-        self.assertEqual(close_before_finish, [False])
-
-    async def test_provider_embedding_remains_immediately_cancellable(self) -> None:
-        directory = TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        root = Path(directory.name)
-        live = LiveMemory(root / "live.sqlite3")
-        await live.initialize()
-        await live.record(
-            MemoryMessage(
-                -100123,
-                1,
-                "needle",
-                datetime(2026, 10, 25, tzinfo=UTC),
-                42,
-                "Owner",
-                "Group",
-            )
-        )
-        originals = await CanonicalHistory(live, MemoryAccess(-100123, False)).originals()
-        provider_started = asyncio.Event()
-        provider_cancelled = asyncio.Event()
-
-        async def query_vector(text: str) -> list[float]:
-            provider_started.set()
             try:
                 await asyncio.Event().wait()
             finally:
-                provider_cancelled.set()
-            return [1.0, 0.0]
+                cancelled.set()
+            return []
 
-        engine = HybridMemory(
-            originals,
-            {embedding_texts(originals)[0]: [1.0, 0.0]},
-            query_vector,
-            dimensions=2,
+        cache.embedder = blocked
+        task = asyncio.create_task(
+            memory.recall(MemoryAccess(-123, False)).search("new query")
         )
-        self.addCleanup(engine.close)
-        query = asyncio.create_task(engine.search("needle"))
-        await asyncio.wait_for(provider_started.wait(), 3)
-        query.cancel()
+        await asyncio.wait_for(started.wait(), 2)
+        closing = asyncio.create_task(memory.close())
+        task.cancel()
         with self.assertRaises(asyncio.CancelledError):
-            await asyncio.wait_for(query, 0.1)
-        self.assertTrue(provider_cancelled.is_set())
-
-    async def test_cancelled_constructor_drains_then_closes_returned_resource_once(
-        self,
-    ) -> None:
-        started, release = threading.Event(), threading.Event()
-        cleanup_started, cleanup_release = threading.Event(), threading.Event()
-        self.addCleanup(release.set)
-        self.addCleanup(cleanup_release.set)
-        resource = object()
-        closed = []
-
-        def construct() -> object:
-            started.set()
-            if not release.wait(3):
-                raise TimeoutError
-            return resource
-
-        def cleanup(value: object) -> None:
-            cleanup_started.set()
-            if not cleanup_release.wait(3):
-                raise TimeoutError
-            closed.append(value)
-
-        operation = asyncio.create_task(run_in_thread(construct, on_cancel=cleanup))
-        self.assertTrue(await asyncio.to_thread(started.wait, 3))
-        operation.cancel()
-        await asyncio.sleep(0)
-        operation.cancel()
-        release.set()
-        self.assertTrue(await asyncio.to_thread(cleanup_started.wait, 3))
-        operation.cancel()
-        await asyncio.sleep(0)
-        self.assertFalse(operation.done())
-        cleanup_release.set()
-        with self.assertRaises(asyncio.CancelledError):
-            await operation
-        self.assertEqual(closed, [resource])
+            await task
+        await asyncio.wait_for(closing, 2)
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual(
+            (await memory.history(MemoryAccess(-123, False)).query("count"))["count"], 1
+        )

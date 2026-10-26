@@ -1,7 +1,6 @@
 """Scoped runtime retrieval through the same service the tools consume."""
 
 import asyncio
-import unittest
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,19 +8,21 @@ from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
 from dashulya.domain.memory import MemoryAccess, MemoryMessage
-from dashulya.memory.live import LiveMemory
 from dashulya.memory.service import HybridChatMemory
+from dashulya.memory.store import MessageStore
 from dashulya.memory.vectors import EmbeddingCache
+from tests.postgres import PostgresTestCase
 
 NOW = datetime(2026, 10, 25, tzinfo=UTC)
 
 
-class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
+class MemoryServiceTests(PostgresTestCase):
     async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        root = Path(directory.name)
-        self.live = LiveMemory(root / "messages.sqlite3")
+        Path(directory.name)
+        self.live = MessageStore(self.database)
         await self.live.initialize()
 
         async def embed(texts: list[str]) -> list[list[float]]:
@@ -30,7 +31,7 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.embed = AsyncMock(side_effect=embed)
         self.service = HybridChatMemory(
             self.live,
-            EmbeddingCache(root / "vectors.sqlite3", self.embed),
+            EmbeddingCache(self.database, self.embed),
             owner_user_id=42,
         )
         self.addAsyncCleanup(self.service.close)

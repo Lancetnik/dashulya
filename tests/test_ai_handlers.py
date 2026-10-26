@@ -1,8 +1,6 @@
 import json
-import unittest
 from contextlib import nullcontext
 from datetime import UTC, datetime
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,6 +16,7 @@ from dashulya.domain.messages import Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.storage.groups import GroupStore
+from tests.postgres import PostgresTestCase
 from tests.support import (
     TEST_API_KEY,
     BotOverride,
@@ -33,8 +32,9 @@ PRIVATE: dict[str, Any] = {"id": 42, "type": "private", "first_name": "Anna"}
 GROUP: dict[str, Any] = {"id": -123, "type": "supergroup", "title": "Test"}
 
 
-class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
+class AIHandlerTests(PostgresTestCase):
     async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.bot = Bot(BOT_TOKEN)
@@ -62,7 +62,6 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
                 bot_token=BOT_TOKEN,
                 openai_api_key=TEST_API_KEY,
                 owner_user_id=USER["id"],
-                database_path=Path(self.directory.name) / "groups.sqlite3",
             ),
             BotOverride(self.bot),
             RecorderOverride(),
@@ -230,7 +229,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.dialogue.clear.assert_not_awaited()
         self.decision_agent.ask.assert_not_awaited()
         self.requests.assert_not_awaited()
-        self.assertEqual(self.groups.list_groups()[0].chat_id, GROUP["id"])
+        self.assertEqual((await self.groups.list_groups())[0].chat_id, GROUP["id"])
 
     async def test_forwarding_from_owner_does_not_grant_access(self) -> None:
         await self.message(
@@ -291,7 +290,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.message("News", chat={"id": -789, "type": "channel", "title": "News"})
         self.dialogue.reply.assert_not_awaited()
-        self.assertEqual(self.groups.list_groups()[0].chat_id, -123)
+        self.assertEqual((await self.groups.list_groups())[0].chat_id, -123)
 
     async def test_group_mentions_and_topic_messages_bypass_decisions(self) -> None:
         text = "💋 @DASHULYA_BOT hello"

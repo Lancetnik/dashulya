@@ -1,9 +1,4 @@
-"""Scope-bound canonical history, independent of semantic indexing availability.
-
-Imported SQLite remains read-only. Only an explicit numeric import binding merges
-it with live evidence. This module does not implement deletion propagation or
-invent prior edit versions: it reads the latest canonical live row each time.
-"""
+"""Scope-bound original-message history over the unified PostgreSQL store."""
 
 import base64
 import hashlib
@@ -14,9 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from dashulya.domain.memory import MemoryAccess, OriginalMessage
-from dashulya.memory._database import _read_connection
-from dashulya.memory.live import LiveMemory
-from dashulya.memory.search import MemorySearch
+from dashulya.memory.store import MessageStore
 
 
 def _identity(message: OriginalMessage) -> tuple[int | None, str | None, str | None]:
@@ -46,21 +39,6 @@ def _date(value: str | None) -> datetime | None:
         error_message = "History dates must include a timezone."
         raise ValueError(error_message)
     return parsed.astimezone(UTC)
-
-
-def _bot(value: object) -> bool | None:
-    return bool(value) if type(value) in {int, bool} and value in {0, 1} else None
-
-
-def _url(chat_id: int, username: str | None, message_id: int) -> str | None:
-    if chat_id > 0:
-        return None
-    if username:
-        return f"https://t.me/{username}/{message_id}"
-    numeric = str(chat_id)
-    if numeric.startswith("-100") and len(numeric) > 4:
-        return f"https://t.me/c/{numeric[4:]}/{message_id}"
-    return None
 
 
 def _authorized(message: OriginalMessage, access: MemoryAccess) -> bool:
@@ -115,125 +93,21 @@ def _cursor_decode(value: str, fingerprint: str) -> tuple[str, str, int]:
 class CanonicalHistory:
     """Bind canonical source access to one trusted conversation.
 
-    Groups can read only their numeric chat, across topics by default. Private
-    access can federate every saved chat and unbound archive. `import_chat_id`
-    is a trusted configuration binding, never inferred from a public username.
+    Groups read their own numeric chat across topics. Private access federates
+    saved chats and unbound archives; import binding is established at ingestion.
     """
 
-    def __init__(
-        self,
-        live: LiveMemory,
-        access: MemoryAccess,
-        *,
-        imported: MemorySearch | None = None,
-        import_chat_id: int | None = None,
-        archive_key: str | None = None,
-    ) -> None:
-        self.live = live
+    def __init__(self, store: MessageStore, access: MemoryAccess) -> None:
+        self.store = store
         self.access = access
-        self.imported = imported
-        self.import_chat_id = import_chat_id
-        self.archive_key = archive_key
-        if imported is not None:
-            self.archive_key = archive_key or imported.coverage.get("source_sha256")
-            if not self.archive_key:
-                error_message = "Imported history needs source_sha256 provenance or an explicit archive_key."
-                raise ValueError(error_message)
-        elif import_chat_id is not None or archive_key is not None:
-            error_message = (
-                "An archive identity or numeric binding requires imported evidence."
-            )
-            raise ValueError(error_message)
-
-    async def _live(self) -> list[OriginalMessage]:
-        async with self.live.connection() as connection:
-            rows = await connection.execute_fetchall(
-                """SELECT m.*, c.title, c.username AS chat_username FROM live_messages m
-                JOIN live_chats c ON c.id=m.chat_id
-                WHERE (? OR m.chat_id=?)""",
-                (self.access.is_private, self.access.chat_id),
-            )
-        records = [dict(row) for row in rows]
-        return [
-            OriginalMessage(
-                collection=f"telegram:{row['chat_id']}",
-                chat_id=row["chat_id"],
-                message_id=row["message_id"],
-                text=row["body"],
-                sent_at=_date(row["sent_at"]),
-                author_id=row["author_id"],
-                author=row["author"],
-                chat_title=row["title"],
-                chat_username=row["chat_username"],
-                topic_id=row["thread_id"],
-                reply_to_id=row["reply_to_id"],
-                edited_at=row["edited_at"],
-                media_type=row["media_type"],
-                url=_url(row["chat_id"], row["chat_username"], row["message_id"]),
-                provenance="live",
-                username=row.get("author_username") or row.get("username"),
-                is_bot=_bot(row.get("is_bot")),
-            )
-            for row in records
-        ]
-
-    async def _imported(self) -> list[OriginalMessage]:
-        if self.imported is None or (
-            not self.access.is_private and self.import_chat_id != self.access.chat_id
-        ):
-            return []
-        collection = (
-            f"telegram:{self.import_chat_id}"
-            if self.import_chat_id is not None
-            else f"archive:{self.archive_key}"
-        )
-        username = self.imported.coverage.get("chat_username")
-        async with _read_connection(self.imported.path) as connection:
-            rows = await connection.execute_fetchall("SELECT * FROM messages")
-        records = [dict(row) for row in rows]
-        return [
-            OriginalMessage(
-                collection=collection,
-                chat_id=self.import_chat_id,
-                message_id=row["id"],
-                text=row["body"],
-                sent_at=_date(row["sent_at"]),
-                author_id=row["user_id"],
-                author=row["author"],
-                chat_title=username or "Imported archive",
-                chat_username=username,
-                # Imported conversation keys group discussions, not Telegram topics.
-                topic_id=None,
-                reply_to_id=row["reply_to_id"],
-                edited_at=None,
-                media_type=None,
-                url=row["url"],
-                provenance="imported",
-                archive_key=self.archive_key,
-                username=row.get("author_username") or row.get("username"),
-                is_bot=_bot(row.get("is_bot")),
-            )
-            for row in records
-        ]
 
     async def originals(self, *, chat: str | None = None) -> list[OriginalMessage]:
         self._chat(chat)
-        # Merge before query filters so a live edit cannot uncover a stale snapshot
-        # merely because its corrected text no longer matches a substring query.
-        merged = {(m.collection, m.message_id): m for m in await self._imported()}
-        merged.update({(m.collection, m.message_id): m for m in await self._live()})
-        visible = [m for m in merged.values() if _authorized(m, self.access)]
-        if (
-            chat is not None
-            and self.access.is_private
-            and chat not in {m.collection for m in visible}
-        ):
+        visible = await self.store.originals(self.access, chat=chat)
+        if chat is not None and self.access.is_private and not visible:
             error_message = "Unknown saved chat collection within this access scope."
             raise ValueError(error_message)
-        return sorted(
-            (m for m in visible if chat is None or m.collection == chat),
-            key=lambda m: m.order,
-        )
+        return visible
 
     def coverage(self, originals: Sequence[OriginalMessage]) -> dict[str, Any]:
         """Describe only supplied, authorized canonical rows, never global index bounds."""

@@ -14,9 +14,9 @@ from typing import Any
 from dashulya.domain.memory import MemoryAccess, MemoryBackend, OriginalMessage
 from dashulya.memory._workers import run_in_thread
 from dashulya.memory.history import CanonicalHistory
-from dashulya.memory.hybrid import HybridMemory, embedding_texts
-from dashulya.memory.live import LiveMemory
-from dashulya.memory.search import MemorySearch
+from dashulya.memory.hybrid import HybridMemory, embedding_texts, lexical_texts
+from dashulya.memory.lexical import LexicalIndex
+from dashulya.memory.store import MessageStore
 from dashulya.memory.vectors import EmbeddingCache
 
 logger = logging.getLogger(__name__)
@@ -40,18 +40,15 @@ def _fingerprint(originals: Sequence[OriginalMessage]) -> str:
 class HybridChatMemory:
     def __init__(
         self,
-        live: LiveMemory,
+        store: MessageStore,
         vectors: EmbeddingCache,
         *,
         owner_user_id: int,
-        imported: MemorySearch | None = None,
-        import_chat_id: int | None = None,
     ) -> None:
-        self.live = live
+        self.store = store
+        self.lexical = LexicalIndex(store.database)
         self.vectors = vectors
         self.owner_user_id = owner_user_id
-        self.imported = imported
-        self.import_chat_id = import_chat_id
         self._worker: asyncio.Task[None] | None = None
         self._engines: OrderedDict[str, _CachedEngine] = OrderedDict()
         self._engine_lock = asyncio.Lock()
@@ -62,12 +59,7 @@ class HybridChatMemory:
         self._idle.set()
 
     def history(self, access: MemoryAccess) -> CanonicalHistory:
-        return CanonicalHistory(
-            self.live,
-            access,
-            imported=self.imported,
-            import_chat_id=self.import_chat_id,
-        )
+        return CanonicalHistory(self.store, access)
 
     def recall(self, access: MemoryAccess) -> MemoryBackend:
         return _Recall(self.history(access), self)
@@ -79,7 +71,6 @@ class HybridChatMemory:
             entry = self._engines[key]
             if entry.users == 0:
                 del self._engines[key]
-                await asyncio.to_thread(entry.engine.close)
 
     @asynccontextmanager
     async def engine(
@@ -93,15 +84,8 @@ class HybridChatMemory:
                 raise RuntimeError(error_message)
             entry = self._engines.get(key)
             if entry is None:
-                texts = await asyncio.to_thread(embedding_texts, originals)
-                vectors = await self.vectors.vectors(texts, create_missing=False)
-
-                async def embed_query(text: str) -> list[float]:
-                    return (await self.vectors.vectors([text]))[text]
-
                 engine = await run_in_thread(
-                    lambda: HybridMemory(originals, vectors, embed_query),
-                    on_cancel=lambda result: result.close(),
+                    lambda: HybridMemory(originals, self.vectors, self.lexical)
                 )
                 entry = _CachedEngine(engine)
                 self._engines[key] = entry
@@ -121,11 +105,12 @@ class HybridChatMemory:
                 await self._evict()
 
     async def refresh_once(self) -> None:
-        pending = await self.live.pending(limit=None)
+        pending = await self.store.pending(limit=None)
         originals = await self.history(
             MemoryAccess(self.owner_user_id, is_private=True)
         ).originals()
         texts = await asyncio.to_thread(embedding_texts, originals)
+        await self.lexical.prepare(await asyncio.to_thread(lexical_texts, originals))
         await self.vectors.vectors(texts, load_vectors=False)
         async with self._engine_lock:
             self._index_generation += 1
@@ -133,9 +118,8 @@ class HybridChatMemory:
             for key, entry in list(self._engines.items()):
                 if entry.users == 0:
                     del self._engines[key]
-                    await asyncio.to_thread(entry.engine.close)
-        # A newer edit cannot be acknowledged by an older embedding batch.
-        await self.live.indexed(pending)
+            # A newer edit cannot be acknowledged by an older embedding batch.
+        await self.store.indexed(pending)
         self._needs_refresh = False
 
     async def start(self) -> None:
@@ -150,7 +134,7 @@ class HybridChatMemory:
         while True:
             await asyncio.sleep(2)
             try:
-                if self._needs_refresh or await self.live.pending(limit=1):
+                if self._needs_refresh or await self.store.pending(limit=1):
                     await self.refresh_once()
             except Exception as error:
                 # Provider text may contain source data or credentials.
@@ -167,8 +151,6 @@ class HybridChatMemory:
             self._closed = True
         await self._idle.wait()
         async with self._engine_lock:
-            for entry in self._engines.values():
-                await asyncio.to_thread(entry.engine.close)
             self._engines.clear()
 
 
@@ -231,7 +213,7 @@ class _Recall:
             hits = await engine.search(
                 query, author_id=author_id, after=after, before=before, limit=limit
             )
-            coverage = dict(engine.coverage)
+            coverage = await engine.coverage()
         output = []
         remaining = 48_000
         for hit in hits:

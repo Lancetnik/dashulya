@@ -37,6 +37,7 @@ With `just` installed, enable them with `uv run pre-commit install`.
 | `src/dashulya/domain/` | Domain models, group lifecycle rules, and persistence/search interfaces |
 | `src/dashulya/memory/` | Local indexing, unified search, evidence reconstruction, and offline commands |
 | `src/dashulya/storage/` | Known-group persistence |
+| `src/dashulya/database.py` | Shared PostgreSQL pool and schema initialization |
 
 When reviewing code, read [CODING_STANDARDS.md](CODING_STANDARDS.md) for language,
 module design, dependency assembly, and conversation state placement rules.
@@ -116,14 +117,16 @@ ignored `var/`. PRDs and specifications live in GitHub Issues. Research notes
 are temporary files under ignored `.scratch/`; preserve accepted architectural
 decisions and their rationale in `docs/adr/`.
 
-`MEMORY_PATH` selects optional imported SQLite originals; an unbound archive is
-private-only. `MEMORY_IMPORT_CHAT_ID` supplies its trusted numeric chat binding.
-`LIVE_MEMORY_PATH` stores received group/owner-private originals and their durable
-revision queue; `MEMORY_VECTORS_PATH` stores resumable embeddings. Merge live edits
-before filtering archives so stale snapshot text cannot reappear. Prior edit
-versions are unavailable. The default Compose agent starts without OpenViking
-or a completed import, mounts `MEMORY_DIRECTORY` read-only and persists local
-originals, vectors, registry and logs. OpenViking is an optional legacy profile.
+`DATABASE_URL` selects the single PostgreSQL database for originals, the registry,
+lexical postings, embeddings and the revision queue. Read [the storage ADR](docs/adr/0005-unify-memory-in-postgresql.md)
+before changing SQL ranking or migrating legacy files. Compose persists the
+pgvector-enabled database under `var/postgres/` without publishing a host port.
+SQLite is an explicit read-only migration/maintenance input, never a runtime
+source. Reuse cached embeddings during migration; verify originals before
+switching the agent and preserve source files for rollback.
+Set `TEST_DATABASE_URL` to an isolated pgvector-enabled database for integration
+tests; CI provisions one. Test schemas are disposable and must stay outside
+application data.
 Read [incoming-message rules](docs/design/chat-memory.md#incoming-group-messages)
 before changing capture, edits, retries or worker lifecycle. Historical answers
 must respect authorized coverage and cite original messages; retrieved content

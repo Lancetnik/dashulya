@@ -1,10 +1,10 @@
 # Chat memory
 
-The current runtime uses `HybridChatMemory`: canonical SQLite originals with
+The current runtime uses `HybridChatMemory`: canonical PostgreSQL originals with
 BM25 keyword recall and cached dense embeddings. It exposes two independent
 read tools, `search_memory` and `chat_history`.
-[ADR 0004](../adr/0004-select-source-hybrid-memory.md) records the backend
-decision and supersedes the earlier OpenViking selection.
+[ADR 0005](../adr/0005-unify-memory-in-postgresql.md) records unified storage and
+native SQL ranking, preserving the hybrid pipeline from ADR 0004.
 [ADR 0003](../adr/0003-bind-chat-memory-access.md) governs source authority
 independently of ranking.
 
@@ -29,12 +29,12 @@ access. Each AG2 session receives trusted `MemoryAccess` from `Dialogue`, bound
 to the actual conversation and the request's original send time/message ID.
 A shared agent never owns an unscoped model-facing reader.
 
-`MEMORY_PATH` optionally supplies an imported SQLite evidence index. An archive
-with source provenance but no verified numeric binding is available only
-privately. `MEMORY_IMPORT_CHAT_ID` explicitly binds it to its originating chat;
-a public username is insufficient. Bound imported and live originals merge by
-chat/message identity, with the latest live original taking precedence before
-filters. A live edit cannot expose stale snapshot text merely because its new
+Imported and received originals share the `messages` table, keyed by collection
+and message ID. Numeric Telegram chat IDs determine bound collections. An archive
+without a verified numeric binding is available only privately; the offline
+importer's `--chat-id` supplies a verified binding. A public username is
+insufficient. Live originals replace imported versions by chat/message identity
+before query filters run. A live edit cannot expose stale snapshot text merely because its new
 text no longer matches a query. Prior edit versions are unavailable. A version
 edited at or after a request's cutoff is excluded, rather than presented as if
 its current text existed earlier.
@@ -53,7 +53,7 @@ labeled, untrusted evidence before the current request. This shares the turn's
 lock and 90-second deadline, with at most ten seconds for initial recall. A failed
 or timed-out initial recall produces only a redacted
 unavailable marker; the agent can still use direct history. Cancellation
-propagates and drains any running SQLite worker before releasing its resources.
+propagates through asynchronous SQL and returns borrowed connections to the pool.
 Private conversation streams retain this evidence alongside normal tool results;
 group reply streams are rebuilt for each request.
 
@@ -103,14 +103,14 @@ responses, are recorded with Telegram-assigned IDs, send times and reply
 relationships. Split responses produce one original per delivered chunk. Rich
 responses retain source Markdown when Telegram supplies no ordinary text.
 
-`LIVE_MEMORY_PATH` holds `live_chats` and `live_messages`. Composite
-`(chat_id, message_id)` keys prevent collisions. Duplicates are idempotent,
+PostgreSQL holds canonical `messages` and their collection metadata. Composite
+`(collection, message_id)` keys prevent collisions. Duplicates are idempotent,
 edits increment a durable revision, and stale updates cannot overwrite newer
 content. Capture commits local evidence before command routing, independent of
 remote indexing readiness. `/clear` resets the private conversation stream;
 it does not erase persistent originals or their vectors.
 
-The same journal supplies immediate group reply context: the latest 20 messages
+The same canonical table, including imported originals, supplies immediate group reply context: the latest 20 messages
 in that chat/topic through the request, plus their ancestors up to five hops.
 Each reply uses a fresh stream, with this bot's previous messages assigned the
 assistant role. This selection is separate from historical memory access; see
@@ -118,38 +118,76 @@ assistant role. This selection is separate from historical memory access; see
 
 ## Preparation, startup and storage
 
-`MEMORY_VECTORS_PATH` stores content-addressed vectors separately from originals.
-An application-owned worker prepares the current message/reply-block payloads
-using bounded provider batches. Completed batches persist across cancellation
-and restarts. Acknowledgement covers only the captured revision; newer edits
-remain pending. The worker checks for pending work every two seconds, with a
-pause after failures. Provider errors are redacted in logs. Removing a source
-or replacing an index does not automatically purge older cached vector rows.
+`DATABASE_URL` selects one PostgreSQL database. `Database` owns one asynchronous
+connection pool, shared by message capture, group tracking, original reads,
+lexical search and pgvector. Original-message writes commit before routing;
+indexing is independent. `embeddings` stores normalized `vector(512)` values
+under the existing content key, including model, dimensions and bounded payload.
+Native exact inner-product SQL ranks only allowed block keys, with stable ties.
+No ANN index is used: all authorized candidates participate before `LIMIT`.
 
-Startup initializes the journal/cache and attempts preparation. A provider
-failure leaves work pending and starts the retry worker; a missing optional
-import is allowed, while an existing invalid index or a numeric binding without
-an imported index fails. An empty journal needs no existing corpus. Startup
-then checks Telegram identity and begins polling. Readiness does not certify
-that every source has an embedding.
+`lexical_documents` and `lexical_terms` store content-addressed block lengths
+and term frequencies. SQL computes BM25 prefix matching with corpus statistics
+over the authorized snapshot, then applies optional candidate filters. Unicode
+6.1 category/folding tables preserve the former FTS5 tokenization. RRF and source
+diversity operate on the bounded candidate rankings in Python; vectors are never
+loaded for a Python scan. Metadata/block construction runs off the event loop.
 
-Compose starts the agent independently of OpenViking. It mounts
-`MEMORY_DIRECTORY` (default `./var/agent`) read-only at `/memory`, with imported
-evidence at `/memory/evidence.sqlite3`. Custom former host `MEMORY_PATH` settings
-must migrate to `MEMORY_DIRECTORY` pointing to the index's parent, with the file
-named `evidence.sqlite3`. Direct Python runs keep using `MEMORY_PATH` directly.
-Live originals and vectors persist at `/var/lib/dashulya/memory.sqlite3` and
-`/var/lib/dashulya/vectors.sqlite3`, backed by host `var/agent/`. Restart after
-changing imported evidence or its numeric binding.
+An application-owned worker prepares current message/reply-block payloads using
+bounded provider batches. Completed batches persist across cancellation and
+restarts. Acknowledgement covers only the captured revision; newer edits remain
+pending. The worker checks pending work every two seconds and pauses after
+failures. Provider errors are redacted. Old content-addressed postings/vectors
+can remain cached but do not participate without authorized current block keys.
 
-Immutable source snapshots belong under ignored `evals/datasets/`; isolated
-indices and results belong under ignored `evals/runs/`. Preserve existing
-maintained facts/summaries by rebuilding into a fresh path. The runtime hybrid
-candidate reads original messages from an imported index; it does not search
-its maintained fact/summary records. Offline maintenance commands remain
-available through `python -m dashulya.memory`; the optional `openviking` Compose
-profile and [legacy experiment guide](../../evals/suites/openviking/README.md)
-retain OpenViking maintenance separately from the agent's active backend.
+Startup initializes the schema and attempts preparation. A provider failure
+leaves work pending and starts the retry worker. An empty database requires no
+import. PostgreSQL must be reachable; startup then verifies Telegram identity
+and begins polling. Readiness does not certify complete embedding coverage.
+Compose persists PostgreSQL under host `var/postgres/`, without a published
+port. `POSTGRES_PASSWORD` configures its internal credentials. Original history,
+reply context and search all use that database. In-memory private conversation
+streams remain separate and ephemeral.
+
+## SQLite migration
+
+Preserve source files and stop the old agent for the final pass so no updates
+arrive between the snapshot and cutover. Use consistent SQLite backups when
+copying an active journal. Build the new image and start PostgreSQL first:
+
+```sh
+docker compose build agent
+docker compose up -d --wait postgres
+docker compose run --rm --no-deps \
+  -v "$(pwd)/var/agent:/legacy:ro" agent \
+  python -m dashulya.memory migrate \
+  --evidence /legacy/evidence.sqlite3 --live /legacy/memory.sqlite3 \
+  --groups /legacy/dashulya.sqlite3 --vectors /legacy/vectors.sqlite3 \
+  --chat-id VERIFIED_NUMERIC_CHAT_ID --owner-user-id OWNER_NUMERIC_USER_ID
+```
+
+Each source flag is optional; omit unavailable inputs. Omit `--chat-id` to keep
+an archive private-only. Binding an already bound archive to a different chat
+is rejected. Binding a previously unbound archive adopts its existing records.
+The command opens SQLite read-only and never calls an embedding provider.
+It copies all available original metadata, preserves legacy fact/summary bodies
+and source IDs in `legacy_records`, and verifies each resulting canonical message
+against the source. Repeating the command is idempotent; newer live versions
+win. A source digest and counts are returned without message bodies or secrets.
+
+After verification, start the agent with `docker compose up -d --wait agent`.
+Its normal worker reuses cached embeddings and prepares only missing/current
+payloads. Preserve SQLite files and the old configuration until the deployment
+is accepted. A rollback after new PostgreSQL writes needs those new originals
+transferred as well; switching containers alone would lose their visibility.
+Use `pg_dump` for live PostgreSQL backups, or stop PostgreSQL before copying its
+data directory.
+
+Immutable source snapshots stay under ignored `evals/datasets/`; isolated
+indices/results stay under `evals/runs/`. Offline SQLite/OpenViking maintenance
+commands remain available through `python -m dashulya.memory` and the
+[legacy experiment guide](../../evals/suites/openviking/README.md). Neither
+legacy engine is in the application's runtime dependency graph.
 
 ## Limits
 

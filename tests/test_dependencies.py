@@ -1,7 +1,5 @@
 import asyncio
 import os
-import sqlite3
-import unittest
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -17,14 +15,17 @@ from aiogram.types import Message, TelegramObject, Update
 from dishka import Provider, provide
 from dishka.integrations.aiogram import inject as inject_aiogram
 from dishka_ag2 import AG2Scope, FromDishka, inject
+from psycopg_pool import PoolClosed
 
 from dashulya.ai.agents.models import AgentModels
 from dashulya.ai.dialogue import Dialogue
+from dashulya.database import Database
 from dashulya.domain.memory import ChatMemoryService
 from dashulya.domain.messages import Reply
 from dashulya.main import create_container, run
 from dashulya.main.config import Settings
 from dashulya.storage.groups import GroupStore
+from tests.postgres import PostgresTestCase
 from tests.support import (
     TEST_API_KEY,
     MemoryOverride,
@@ -104,17 +105,15 @@ async def record_update(
     trace.telegram_calls.append((message, event, call))
 
 
-class DependencyTests(unittest.IsolatedAsyncioTestCase):
+class DependencyTests(PostgresTestCase):
     def setUp(self) -> None:
+        super().setUp()
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.settings = Settings(
             bot_token="123456789:TEST_ONLY_NOT_A_REAL_BOT_TOKEN",
             openai_api_key=TEST_API_KEY,
             owner_user_id=42,
-            database_path=Path(self.directory.name) / "groups.sqlite3",
-            memory_path=Path(self.directory.name) / "missing.sqlite3",
-            live_memory_path=Path(self.directory.name) / "live.sqlite3",
         )
 
     async def test_agents_and_dialogue_are_shared_but_agent_roles_are_distinct(
@@ -275,39 +274,26 @@ class DependencyTests(unittest.IsolatedAsyncioTestCase):
                             await run(self.settings)
                 polling.assert_awaited_once_with(bot, close_bot_session=False)
                 close.assert_awaited_once()
-                with self.assertRaises(sqlite3.ProgrammingError):
-                    groups.list_groups()
+                with self.assertRaises(PoolClosed):
+                    await groups.list_groups()
 
     async def test_partial_startup_failure_closes_the_bot_session(self) -> None:
-        settings = replace(self.settings, database_path=Path(self.directory.name))
+        settings = self.settings
         container = create_container(settings, MemoryOverride(), RecorderOverride())
         bot = await container.get(Bot)
         close = AsyncMock(wraps=bot.session.close)
         with (
             patch("dashulya.main.runtime.create_container", return_value=container),
             patch.object(bot.session, "close", close),
-            self.assertRaises(sqlite3.OperationalError),
+            self.assertRaises(RuntimeError),
+            patch.object(
+                Database,
+                "open",
+                AsyncMock(side_effect=RuntimeError("Database unavailable")),
+            ),
         ):
             await run(settings)
         close.assert_awaited_once()
-
-    async def test_bound_missing_import_stops_startup_before_telegram_polling(
-        self,
-    ) -> None:
-        marker = Path(self.directory.name) / "ready"
-        marker.write_text("stale")
-        settings = replace(
-            self.settings, healthcheck_path=marker, memory_import_chat_id=-100123
-        )
-        container = create_container(settings)
-        with (
-            patch("dashulya.main.runtime.create_container", return_value=container),
-            patch.object(Dispatcher, "start_polling", AsyncMock()) as polling,
-            self.assertRaisesRegex(ValueError, "MEMORY_PATH"),
-        ):
-            await run(settings)
-        polling.assert_not_awaited()
-        self.assertFalse(marker.exists())
 
     async def test_container_readiness_requires_identity_and_is_cleared_on_shutdown(
         self,

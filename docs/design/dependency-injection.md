@@ -3,7 +3,7 @@
 The top-level `main` package owns environment configuration, assembly, every
 provider, and framework integration setup. Telegram handlers and AG2 tools use
 standard Dishka decorators and dependency annotations directly. Domain, memory,
-and storage stay independent of DI. Lower modules never import `main`; the
+storage and database infrastructure stay independent of DI. Lower modules never import `main`; the
 launch entrypoint and tests may do so.
 
 ## Module responsibilities
@@ -15,7 +15,8 @@ main/
   runtime.py             Startup, polling, logging, and container cleanup
   providers/
     ai.py                Connect AI factories to configuration and DI
-    domain.py            Group repository lifetime and domain registration
+    database.py          Shared PostgreSQL pool lifetime
+    domain.py            Group repository and domain registration
     memory.py            Select and construct the memory backend
     telegram.py          Bot session, middleware, and dispatcher
 ai/
@@ -36,40 +37,33 @@ domain/
 
 `domain` has no application or infrastructure imports. `GroupRegistry` owns
 observed group migrations, membership changes, and bounded group-list output.
-`storage.groups.GroupStore` implements `GroupRepository` using SQLite. The
-provider aliases that implementation to the domain interface and owns cleanup.
-`ChatMemoryService` binds application resources to a trusted `MemoryAccess` and
-returns separate `MemoryBackend` recall and `HistoryReader` canonical readers.
-The selected implementation is `HybridChatMemory`, as recorded in
-[ADR 0004](../adr/0004-select-source-hybrid-memory.md).
-Imported evidence metadata is loaded with `await MemorySearch.open(path)`
-when a local index exists. An absent optional index is allowed; an existing
-invalid index or a numeric import binding without evidence fails startup.
+`storage.groups.GroupStore` implements the asynchronous `GroupRepository` using
+PostgreSQL. `DatabaseProvider` owns the single application-scoped async pool,
+initializes its schema and closes it after dependent resources are finalized.
+The domain provider aliases the registry implementation to its interface.
 
-`LiveMemory` implements `MessageRecorder` with asynchronous SQLite writes and a
-persisted revision queue. The application-scoped `MemoryProvider` initializes
-it and shares the same instance between capture, canonical history and recall.
-The provider owns the OpenAI embedding client and persistent `EmbeddingCache`;
-`HybridChatMemory` owns background preparation and bounded cached retrieval
-engines. Startup attempts preparation, retaining queued work after provider
-failure. The service cancels and joins its worker, waits for active retrieval
-leases and closes cached SQLite engines before the provider closes its client.
-Completed vector batches and pending revisions survive restarts. Capture waits
-for local persistence, while preparation owns provider calls and retries.
+`MessageStore` implements `MessageRecorder` and `ChatHistory`. Imported and
+received originals share its canonical table, read by immediate reply context,
+`chat_history` and `search_memory`. Offline migration is explicit; runtime startup
+never opens a SQLite archive. [ADR 0005](../adr/0005-unify-memory-in-postgresql.md)
+records the storage decision. `ChatMemoryService` binds trusted `MemoryAccess`
+to separate recall and canonical readers for each AG2 session.
 
-The same journal implements `ChatHistory` for recent-message and bounded
-reply-parent selection independently of embeddings. `AgentProvider` supplies
-it and the Telegram bot ID to `Dialogue`. Input and outgoing session middleware
-share conversion in `bot/messages.py`. Group messages from all participants,
-owner-private messages and successful deliveries are captured with actual
-Telegram-assigned IDs; other private senders are excluded. `TelegramProvider`
+`MemoryProvider` shares the store and persistent `EmbeddingCache`, and owns the
+OpenAI embedding client. `HybridChatMemory` owns background preparation and
+bounded metadata engines. Startup attempts preparation; provider failures retain
+queued work. Finalization cancels/joins the worker and waits for active retrieval
+leases before the client and database pool close. Completed batches and pending
+revisions survive restarts. SQL operations use async pooled connections; only
+metadata construction/fingerprinting runs in CPU threads. Ranking uses native
+pgvector and SQL BM25, then bounded RRF in Python. Cancelled SQL returns its
+connection safely to the pool.
+
+`AgentProvider` supplies the same store and Telegram bot ID to `Dialogue`.
+Incoming/outgoing capture share conversion in `bot/messages.py`. Group messages
+from all participants, owner-private messages and successful deliveries use
+actual Telegram IDs; other private senders are excluded. `TelegramProvider`
 attaches outgoing capture to the shared bot session.
-
-Canonical history uses asynchronous SQLite reads. Hybrid ranking and construction
-run bounded CPU/SQLite work in worker threads; cancellation drains started work
-before releasing its resource lease. Embedding provider calls stay on the owning
-event loop. The injected tools await their readers directly and own no thread
-scheduling. Offline index maintenance retains synchronous SQLite access.
 
 AI factories accept ordinary arguments; tools declare injected dependencies
 with `FromDishka` and the AG2 integration's `@inject`. Model choices, timeouts,
@@ -91,7 +85,7 @@ fallback. Domain messages carry no aiogram objects.
 
 `main/container.py` builds one graph with `AG2Scope`. Application dependencies
 are cached in `APP`: settings, model configurations, both agents, `Dialogue`,
-`GroupAddressing`, `ChatMemoryService`, the vector cache/client, `GroupStore`,
+`GroupAddressing`, `ChatMemoryService`, the database pool, vector cache/client, `GroupStore`,
 `GroupRegistry`, `ReplyDelivery`, the Telegram bot, and the dispatcher. Application resolution
 uses an async lock to keep lazy construction unique across concurrent events.
 
@@ -140,7 +134,7 @@ These are not request dependencies. AG2's explicit conversation scope is not
 needed here.
 
 `main.run` closes the container in `finally`, including polling failures,
-cancellation, and partial startup failures. The bot session and group database
+cancellation, and partial startup failures. The bot session and shared database pool
 are finalized by their providers. Memory resources live in the application
 scope; conversation authority and bound readers live in the AG2 session scope.
 
@@ -159,7 +153,7 @@ Dispatcher tests combine injection with access, tracking, routing, and delivery.
 Memory tests execute injected tools through real AG2 with scripted or
 mock-transport model responses. They check scope isolation, edit shadowing,
 pagination/counts, embedding failures and cancellation-safe resource release.
-They also check that a database lock leaves the event loop available. Search,
+They also cancel a real PostgreSQL query and verify pool reuse. Search,
 expansion, and comparison commands await the same backend interface, with one
 event loop started at the CLI entrypoint. No live Telegram or paid model
 requests are needed.
@@ -172,15 +166,9 @@ and domain/infrastructure modules independent of DI.
 
 ## Container startup
 
-Compose starts the agent without a memory-service dependency. The runtime
-resolves `ChatMemoryService`, initializing local state and attempting pending
-preparation before accessing Telegram. With `HEALTHCHECK_PATH`
-configured by the image, startup removes any stale readiness marker, verifies
-the Telegram bot identity, and writes the current PID before polling. Shutdown
-removes the marker and closes the container. The health check therefore verifies
-completed startup, not just the existence of a Python process.
-
-The optional `openviking` Compose profile is for legacy maintenance. Its service
-key is checked inside its entrypoint so an inactive profile does not require the
-key during Compose interpolation. Existing workspace state stays mounted and
-the published port remains bound to loopback.
+Compose waits for its pgvector-enabled PostgreSQL service to become healthy.
+The runtime resolves `ChatMemoryService`, initializing the shared schema and
+attempting pending preparation before accessing Telegram. With
+`HEALTHCHECK_PATH` configured, startup removes a stale marker, verifies Telegram
+identity and writes the current PID before polling. Shutdown removes the marker
+and closes the container. Readiness verifies startup, not embedding coverage.

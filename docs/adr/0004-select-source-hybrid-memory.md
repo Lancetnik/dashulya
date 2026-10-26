@@ -1,5 +1,8 @@
 # Select hybrid recall over canonical original messages
 
+Storage and execution details are superseded by [ADR 0005](0005-unify-memory-in-postgresql.md).
+The hybrid ranking and source-evidence decision remains in effect.
+
 Use BM25 and dense embeddings of original messages with up to two reply parents,
 combine rankings with reciprocal rank fusion, and return source-diverse evidence.
 Persist originals and content-addressed vectors locally. The application starts

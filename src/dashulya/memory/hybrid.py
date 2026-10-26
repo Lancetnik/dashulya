@@ -2,17 +2,16 @@
 
 # ruff: file-ignore[ambiguous-unicode-character-string] -- Russian tokenization rules are intentional language data.
 
-import math
 import re
-import sqlite3
-from array import array
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from dashulya.domain.memory import OriginalMessage
 from dashulya.memory._workers import run_in_thread
+from dashulya.memory.lexical import LexicalIndex
 from dashulya.memory.ranking import reciprocal_rank_fusion, select_source_diverse
+from dashulya.memory.vectors import EmbeddingCache
 
 _QUERY_CANDIDATES = 160
 
@@ -254,18 +253,6 @@ def _date(value: str | None) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def _vector(values: Sequence[float], dimensions: int) -> Sequence[float]:
-    vector = array("f", values)
-    if len(vector) != dimensions or not all(math.isfinite(value) for value in vector):
-        error = "Embedding vector must be finite and match configured dimensions."
-        raise ValueError(error)
-    norm = math.hypot(*vector)
-    if not math.isfinite(norm):
-        error = "Embedding vector magnitude is invalid."
-        raise ValueError(error)
-    return array("f", (value / norm for value in vector)) if norm else vector
-
-
 @dataclass(frozen=True)
 class HybridHit:
     text: str
@@ -273,47 +260,35 @@ class HybridHit:
     score: float
 
 
+def lexical_texts(originals: Sequence[OriginalMessage]) -> list[str]:
+    return ["\n\n".join(_render(m) for m in block) for block in _blocks(originals)]
+
+
 class HybridMemory:
-    """Rank canonical raw blocks; provider calls and durable indexing stay outside."""
+    """Rank one authorized snapshot using PostgreSQL BM25 and pgvector."""
 
     def __init__(
         self,
         originals: Sequence[OriginalMessage],
-        source_vectors: Mapping[str, Sequence[float]],
-        embed_query: Callable[[str], Awaitable[Sequence[float]]],
-        *,
-        dimensions: int = 512,
+        vectors: EmbeddingCache,
+        lexical: LexicalIndex,
     ) -> None:
-        if dimensions < 1:
-            error = "Embedding dimensions must be positive."
-            raise ValueError(error)
         self._blocks = _blocks(originals)
         self._dates = [_time(block[-1]) for block in self._blocks]
-        self._embed_query = embed_query
-        self._dimensions = dimensions
-        self._vectors = {
-            i: _vector(source_vectors[text], dimensions)
-            for i, block in enumerate(self._blocks)
-            if (text := _embedding_text(block)) in source_vectors
-        }
-        self._db = sqlite3.connect(":memory:", check_same_thread=False)
-        self._db.execute(
-            "CREATE VIRTUAL TABLE blocks_fts USING fts5(text, tokenize='unicode61 remove_diacritics 2')"
-        )
-        self._db.executemany(
-            "INSERT INTO blocks_fts(rowid,text) VALUES(?,?)",
-            (
-                (i, "\n\n".join(_render(m) for m in block))
-                for i, block in enumerate(self._blocks, 1)
-            ),
-        )
+        self._vectors = vectors
+        self._lexical = lexical
+        self._texts = ["\n\n".join(_render(m) for m in block) for block in self._blocks]
+        self._lexical_keys = [lexical.key(text) for text in self._texts]
+        self._vector_keys = [
+            vectors.key(_embedding_text(block)) for block in self._blocks
+        ]
 
-    @property
-    def coverage(self) -> dict[str, int]:
+    async def coverage(self) -> dict[str, int]:
+        embedded = len(await self._vectors.saved_keys(self._vector_keys))
         return {
             "source_count": len(self._blocks),
-            "embedded_blocks": len(self._vectors),
-            "pending_blocks": len(self._blocks) - len(self._vectors),
+            "embedded_blocks": embedded,
+            "pending_blocks": len(self._blocks) - embedded,
         }
 
     async def search(
@@ -330,61 +305,23 @@ class HybridMemory:
         eligible = await run_in_thread(lambda: self._eligible(author_id, after, before))
         if not eligible:
             return []
-        query_vector = None
-        if eligible & self._vectors.keys():
-            # The injected provider stays on its owning event loop.
-            query_vector = _vector(await self._embed_query(query), self._dimensions)
-        return await run_in_thread(
-            lambda: self._search_sync(query, eligible, query_vector, limit)
+        await self._lexical.prepare(self._texts)
+        lexical = await self._lexical.search(
+            self._lexical_keys,
+            [self._lexical_keys[i] for i in sorted(eligible)],
+            query_terms(query),
+            limit=_QUERY_CANDIDATES,
         )
-
-    def _eligible(
-        self, author_id: int | None, after: str | None, before: str | None
-    ) -> set[int]:
-        lower, upper = _date(after), _date(before)
-        if lower is not None and upper is not None and lower > upper:
-            error = "after must not be later than before."
-            raise ValueError(error)
-        return {
-            i
-            for i, (block, sent) in enumerate(zip(self._blocks, self._dates, strict=True))
-            if (author_id is None or block[-1].author_id == author_id)
-            and (lower is None or (sent is not None and sent >= lower))
-            and (upper is None or (sent is not None and sent <= upper))
-        }
-
-    def _search_sync(
-        self,
-        query: str,
-        eligible: set[int],
-        query_vector: Sequence[float] | None,
-        limit: int,
-    ) -> list[HybridHit]:
-        lexical = []
-        terms = query_terms(query)
-        if terms:
-            expression = " OR ".join(f'"{term}"*' for term in terms)
-            for row in self._db.execute(
-                "SELECT rowid FROM blocks_fts WHERE blocks_fts MATCH ? ORDER BY bm25(blocks_fts)",
-                (expression,),
-            ):
-                i = int(row[0]) - 1
-                if i in eligible:
-                    lexical.append(i)
-                    if len(lexical) >= _QUERY_CANDIDATES:
-                        break
-        rankings = [lexical]
-        semantic = eligible & self._vectors.keys()
-        if query_vector is not None:
-            scores = {
-                i: math.fsum(
-                    a * b for a, b in zip(self._vectors[i], query_vector, strict=True)
-                )
-                for i in semantic
-            }
-            rankings.append(
-                sorted(scores, key=lambda i: (-scores[i], i))[:_QUERY_CANDIDATES]
+        lex_positions = {key: i for i, key in enumerate(self._lexical_keys)}
+        rankings = [[lex_positions[key] for key in lexical]]
+        vector_keys = [self._vector_keys[i] for i in sorted(eligible)]
+        if await self._vectors.saved_keys(vector_keys):
+            query_vector = (await self._vectors.vectors([query]))[query]
+            dense = await self._vectors.nearest(
+                vector_keys, query_vector, limit=_QUERY_CANDIDATES
             )
+            positions = {key: i for i, key in enumerate(self._vector_keys)}
+            rankings.append([positions[key] for key in dense])
         fused = reciprocal_rank_fusion(rankings, tie_order={i: i for i in eligible})
         allowed = {self._blocks[i][-1].source_id for i in eligible}
         candidates = [
@@ -404,5 +341,17 @@ class HybridMemory:
             limit=min(limit, 8),
         )
 
-    def close(self) -> None:
-        self._db.close()
+    def _eligible(
+        self, author_id: int | None, after: str | None, before: str | None
+    ) -> set[int]:
+        lower, upper = _date(after), _date(before)
+        if lower is not None and upper is not None and lower > upper:
+            error_message = "after must not be later than before."
+            raise ValueError(error_message)
+        return {
+            i
+            for i, (block, sent) in enumerate(zip(self._blocks, self._dates, strict=True))
+            if (author_id is None or block[-1].author_id == author_id)
+            and (lower is None or (sent is not None and sent >= lower))
+            and (upper is None or (sent is not None and sent <= upper))
+        }

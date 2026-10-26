@@ -3,7 +3,6 @@ import json
 import threading
 import unittest
 from datetime import timedelta
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -25,16 +24,18 @@ from dashulya.domain.messages import ConversationKey, Reply
 from dashulya.main.config import Settings
 from dashulya.main.providers.ai import AgentProvider
 from dashulya.memory._workers import run_in_thread
-from dashulya.memory.live import LiveMemory
+from dashulya.memory.store import MessageStore
+from tests.postgres import PostgresTestCase
 from tests.support import TEST_API_KEY, reply_json
 from tests.test_memory_access import GROUP, NOW, OTHER, _Dependencies, _Service
 
 
-class DialogueRecallTests(unittest.IsolatedAsyncioTestCase):
+class DialogueRecallTests(PostgresTestCase):
     async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.live = LiveMemory(Path(directory.name) / "live.sqlite3")
+        self.live = MessageStore(self.database)
         await self.live.initialize()
         for chat_id, message_id, body, date in (
             (GROUP, 1, "needle authorized source", NOW - timedelta(seconds=1)),

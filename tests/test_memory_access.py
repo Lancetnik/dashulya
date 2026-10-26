@@ -1,10 +1,8 @@
 import asyncio
 import json
-import unittest
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import patch
@@ -30,7 +28,8 @@ from dashulya.domain.messages import Reply
 from dashulya.main.config import Settings
 from dashulya.main.providers.ai import AgentProvider
 from dashulya.memory.history import CanonicalHistory
-from dashulya.memory.live import LiveMemory
+from dashulya.memory.store import MessageStore
+from tests.postgres import PostgresTestCase
 from tests.support import TEST_API_KEY, reply_json
 
 NOW = datetime(2026, 10, 25, 12, tzinfo=UTC)
@@ -69,7 +68,7 @@ class _Recall:
 
 
 class _Service:
-    def __init__(self, live: LiveMemory) -> None:
+    def __init__(self, live: MessageStore) -> None:
         self.live = live
         self.bound: list[tuple[str, MemoryAccess]] = []
 
@@ -111,11 +110,12 @@ class _Dependencies(Provider):
             await bot.session.close()
 
 
-class MemoryAccessIntegrationTests(unittest.IsolatedAsyncioTestCase):
+class MemoryAccessIntegrationTests(PostgresTestCase):
     async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.live = LiveMemory(Path(self.directory.name) / "live.sqlite3")
+        self.live = MessageStore(self.database)
         await self.live.initialize()
         for chat_id, text in (
             (GROUP, "Group source"),

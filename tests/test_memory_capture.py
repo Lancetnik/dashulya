@@ -1,6 +1,5 @@
 """Owner private capture and canonical identity regression coverage."""
 
-import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -9,11 +8,13 @@ from unittest.mock import AsyncMock
 from aiogram.types import Message, Update
 
 from dashulya.bot.middlewares.memory import CaptureMessagesMiddleware
-from dashulya.domain.memory import MemoryMessage, MessageRecorder
-from dashulya.memory.live import LiveMemory
+from dashulya.domain.memory import MemoryAccess, MemoryMessage, MessageRecorder
+from dashulya.memory.history import CanonicalHistory
+from dashulya.memory.store import MessageStore
+from tests.postgres import PostgresTestCase
 
 
-class MemoryCaptureTests(unittest.IsolatedAsyncioTestCase):
+class MemoryCaptureTests(PostgresTestCase):
     @staticmethod
     def incoming(sender: int = 42, *, bot: bool = False) -> Message:
         return Message.model_validate({
@@ -61,8 +62,8 @@ class MemoryCaptureTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_schema_migration_and_metadata_survive_restart(self) -> None:
         with TemporaryDirectory() as directory:
-            path = Path(directory) / "memory.sqlite3"
-            store = LiveMemory(path)
+            Path(directory) / "memory.sqlite3"
+            store = MessageStore(self.database)
             await store.initialize()
             message = MemoryMessage(
                 chat_id=42,
@@ -77,12 +78,13 @@ class MemoryCaptureTests(unittest.IsolatedAsyncioTestCase):
                 is_bot=False,
             )
             await store.record(message)
-            restarted = LiveMemory(path)
+            restarted = MessageStore(self.database)
             await restarted.initialize()
             await restarted.initialize()
             messages = await restarted.context((42, None), 1, limit=20, parent_hops=5)
             self.assertEqual(messages[0].username, "alice")
             self.assertIs(messages[0].is_bot, False)
-            expanded = await restarted.expand("telegram:42:1", None, None, None)
-            self.assertFalse(expanded[0]["sources"][0]["url"])
+
+            expanded = await CanonicalHistory(restarted, MemoryAccess(42, True)).query()
+            self.assertIsNone(expanded["messages"][0]["url"])
             self.assertEqual((await restarted.coverage())["message_count"], 1)

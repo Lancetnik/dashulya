@@ -1,5 +1,4 @@
 import asyncio
-import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -20,7 +19,8 @@ from dashulya.ai.dialogue import Dialogue
 from dashulya.domain.messages import Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
-from dashulya.memory.live import LiveMemory
+from dashulya.memory.store import MessageStore
+from tests.postgres import PostgresTestCase
 from tests.support import (
     TEST_API_KEY,
     BotOverride,
@@ -41,12 +41,13 @@ OWNER = {"id": 42, "is_bot": False, "first_name": "Anna"}
 CHAT = {"id": -100123, "type": "supergroup", "title": "Group"}
 
 
-class GroupContextTests(unittest.IsolatedAsyncioTestCase):
+class GroupContextTests(PostgresTestCase):
     async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        path = Path(directory.name)
-        self.store = LiveMemory(path / "live.sqlite3")
+        Path(directory.name)
+        self.store = MessageStore(self.database)
         await self.store.initialize()
         self.bot = Bot("123:TEST")
         self.addAsyncCleanup(self.bot.session.close)
@@ -65,7 +66,6 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
                 bot_token=self.bot.token,
                 openai_api_key=TEST_API_KEY,
                 owner_user_id=42,
-                database_path=path / "groups.sqlite3",
             ),
             BotOverride(self.bot),
             RecorderOverride(self.store),

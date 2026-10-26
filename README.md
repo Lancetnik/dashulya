@@ -48,7 +48,7 @@ Try questions such as:
 >
 > Who was considering reusing Osinara for a bot with custom skills?
 
-Memory uses canonical SQLite originals, BM25 keyword search and cached dense
+Memory uses canonical PostgreSQL originals, BM25 keyword search and pgvector dense
 embeddings over messages with their reply parents. An imported snapshot is
 optional. Groups can recall only their own chat, across topics; the owner's
 private conversation can recall all saved chats. Imported archives need an
@@ -60,8 +60,8 @@ history reads remain available during embedding outages. A semantic-query
 failure is reported through the tool rather than silently claiming a complete
 search. Historical backfill, maintained-fact writes/corrections, deletion
 synchronization, full memory continuity across group migrations and web search
-are not implemented. [ADR 0004](docs/adr/0004-select-source-hybrid-memory.md)
-records the backend decision.
+are not implemented. [ADR 0005](docs/adr/0005-unify-memory-in-postgresql.md)
+records the storage decision.
 
 ## Commands
 
@@ -131,8 +131,8 @@ remain in UTC.
 ## Getting started
 
 You need Docker with Compose, a Telegram bot token and an OpenAI API key.
-Run commands from the project root. The agent can start with an empty local
-journal; an imported corpus and OpenViking service are optional.
+Run commands from the project root. Compose starts PostgreSQL with pgvector and
+the agent. The database can start empty; importing an existing corpus is optional.
 
 ### 1. Configure the application
 
@@ -146,6 +146,7 @@ Fill in these values:
 BOT_TOKEN=your_bot_token
 OWNER_USER_ID=your_numeric_telegram_user_id
 OPENAI_API_KEY=your_openai_api_key
+POSTGRES_PASSWORD=generated_random_hex_password
 ```
 
 Create a bot through [@BotFather](https://t.me/BotFather). Use your numeric
@@ -154,24 +155,18 @@ credentials. Your `.env` stays out of Git and the Docker build context. The repl
 and addressing models default to `gpt-6-luna`; model, timezone and local storage
 settings are listed in [.env.example](.env.example).
 
-### 2. Choose optional imported evidence
+Generate `POSTGRES_PASSWORD` with `openssl rand -hex 32`. Keep it stable for an
+existing database. Compose supplies the internal `DATABASE_URL`; direct Python
+and CLI runs need a URL for a reachable PostgreSQL server with pgvector installed.
 
-Skip this step to start with newly received messages. To retain an existing
-SQLite evidence index, place it at `var/agent/evidence.sqlite3`. Compose mounts
-`MEMORY_DIRECTORY` (default `./var/agent`) read-only at `/memory` and sets the
-container's `MEMORY_PATH` to `/memory/evidence.sqlite3`. No completed OpenViking
-import or manifest is required. A malformed existing index still fails startup.
+### 2. Import optional existing data
 
-For a custom host `MEMORY_PATH` from an earlier deployment, set
-`MEMORY_DIRECTORY` to that file's parent directory and ensure the index is named
-`evidence.sqlite3` there; preserve the original if making a copy. Compose no
-longer uses the host `MEMORY_PATH` as a single-file mount. Direct Python runs
-continue to use `MEMORY_PATH` normally.
-
-Set `MEMORY_IMPORT_CHAT_ID` only after verifying the archive's actual numeric
-Telegram chat ID. Without this trusted binding, the archive is available only
-in the owner's private conversation; a matching public username does not grant
-access to a group. See the [memory guide](docs/design/chat-memory.md).
+Skip this step for a new deployment. To migrate an existing SQLite deployment,
+stop its agent, preserve the old files, and follow the [migration procedure](docs/design/chat-memory.md#sqlite-migration).
+It copies imported and received originals, the group registry, cached embeddings
+and legacy knowledge into PostgreSQL, verifies canonical messages and never
+requests new embeddings. An archive needs a verified numeric Telegram chat ID
+before it can be exposed to that group; an unbound archive remains private-only.
 
 ### 3. Start the agent
 
@@ -179,7 +174,7 @@ access to a group. See the [memory guide](docs/design/chat-memory.md).
 docker compose up -d --build --wait
 ```
 
-Startup initializes local originals and the vector cache, attempts pending
+Startup initializes the PostgreSQL schema and vector cache, attempts pending
 embedding preparation, verifies the Telegram bot identity and starts polling.
 Embedding errors leave canonical history available and indexing queued for retry.
 Docker's agent health check reflects completed startup, rather than complete
@@ -194,24 +189,13 @@ docker compose logs -f agent
 docker compose down
 ```
 
-The [Compose file](docker-compose.yaml) persists the group registry, live
-originals and vectors under `var/agent/`, and logs under `var/logs/`. Imported
-SQLite evidence is read-only. These local files survive container recreation
-and are excluded from Git. Credentials, chat history, logs and developer tools
-are excluded from the agent image.
-
-The optional `openviking` Compose profile preserves legacy maintenance access
-and existing `var/openviking/` state. Set a nonempty `OPENVIKING_API_KEY` before
-starting it explicitly:
-
-```sh
-docker compose --profile openviking up -d --wait openviking
-```
-
-Its port stays bound to loopback (`http://127.0.0.1:1933` by default). The default
-agent does not depend on this service or its key. The optional service refuses
-to start without its key. Follow the [legacy import guide](evals/suites/openviking/README.md)
-for maintenance of an existing OpenViking corpus.
+The [Compose file](docker-compose.yaml) persists originals, the registry, lexical
+postings and embeddings in `var/postgres/`, and logs in `var/logs/`. PostgreSQL
+has no published host port. These directories survive container recreation and
+are excluded from Git. Back up the running database with `pg_dump`; copy its data
+directory only while PostgreSQL is stopped. Preserve pre-migration SQLite files
+for rollback. The runtime uses PostgreSQL exclusively; legacy SQLite/OpenViking
+maintenance commands remain available offline.
 
 Compose bind-mounts `./src` read-only at `/app/src`. `PYTHONPATH` makes these host
 sources take precedence over the installed package in the image. After editing
@@ -235,7 +219,10 @@ final decision for the current comparison.
 
 GitHub Actions runs the development checks on pushes to `main` and pull requests.
 Tests and package builds run on Python 3.12, 3.13, and 3.14 without live Telegram
-or model API calls. Run `just check` locally before publishing changes.
+or model API calls. PostgreSQL integration tests use a disposable schema per test.
+Set `TEST_DATABASE_URL` to an isolated pgvector-enabled test database before
+running `just check`; CI provisions it automatically. Without this variable,
+PostgreSQL integration tests are skipped. Never point it at application data.
 
 Architecture, development commands, and reference bot repositories live in
 [AGENTS.md](AGENTS.md). The [repository layout](docs/design/repository-layout.md)

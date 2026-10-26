@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram.utils.token import TokenValidationError, validate_token
@@ -14,17 +15,15 @@ class Settings:
     owner_user_id: int
     openai_model: str = "gpt-6-luna"
     openai_decision_model: str = "gpt-6-luna"
-    database_path: Path = Path("var/agent/dashulya.sqlite3")
-    memory_path: Path = Path("var/agent/evidence.sqlite3")
+    database_url: str = field(
+        default_factory=lambda: os.getenv(
+            "DATABASE_URL", "postgresql://localhost/dashulya"
+        ),
+        repr=False,
+    )
     log_path: Path = Path("var/logs/dashulya.log")
     bot_timezone: str = "Europe/Moscow"
-    openviking_url: str = "http://127.0.0.1:1933"
-    openviking_manifest: Path = Path("var/agent/import/manifest.json")
-    openviking_api_key: str = field(default="", repr=False)
     healthcheck_path: Path | None = None
-    live_memory_path: Path = Path("var/agent/memory.sqlite3")
-    memory_vectors_path: Path = Path("var/agent/vectors.sqlite3")
-    memory_import_chat_id: int | None = None
 
 
 def load_settings() -> Settings:
@@ -62,15 +61,18 @@ def load_settings() -> Settings:
             "BOT_TIMEZONE must be a valid IANA timezone, such as Europe/Moscow."
         )
         raise ValueError(error_message) from None
-    import_chat = os.getenv("MEMORY_IMPORT_CHAT_ID", "").strip()
+    database_url = os.getenv("DATABASE_URL", "").strip()
     try:
-        memory_import_chat_id = int(import_chat) if import_chat else None
+        parsed = urlsplit(database_url)
+        if (
+            parsed.scheme not in {"postgresql", "postgres"}
+            or not parsed.hostname
+            or not parsed.path.strip("/")
+        ):
+            raise ValueError
     except ValueError:
-        error_message = "MEMORY_IMPORT_CHAT_ID must be a nonzero Telegram chat ID."
+        error_message = "Set DATABASE_URL to a PostgreSQL connection URL."
         raise ValueError(error_message) from None
-    if memory_import_chat_id == 0:
-        error_message = "MEMORY_IMPORT_CHAT_ID must be a nonzero Telegram chat ID."
-        raise ValueError(error_message)
     return Settings(
         bot_token=token,
         openai_api_key=api_key,
@@ -78,23 +80,10 @@ def load_settings() -> Settings:
         openai_model=os.getenv("OPENAI_MODEL", "").strip() or "gpt-6-luna",
         openai_decision_model=os.getenv("OPENAI_DECISION_MODEL", "").strip()
         or "gpt-6-luna",
-        database_path=Path(os.getenv("DATABASE_PATH") or "var/agent/dashulya.sqlite3"),
-        memory_path=Path(os.getenv("MEMORY_PATH") or "var/agent/evidence.sqlite3"),
+        database_url=database_url,
         log_path=Path(os.getenv("LOG_PATH") or "var/logs/dashulya.log"),
         bot_timezone=bot_timezone,
-        openviking_url=os.getenv("OPENVIKING_URL", "").strip() or "http://127.0.0.1:1933",
-        openviking_manifest=Path(
-            os.getenv("OPENVIKING_MANIFEST") or "var/agent/import/manifest.json"
-        ),
-        openviking_api_key=os.getenv("OPENVIKING_API_KEY", "").strip(),
         healthcheck_path=Path(value)
         if (value := os.getenv("HEALTHCHECK_PATH"))
         else None,
-        memory_vectors_path=Path(
-            os.getenv("MEMORY_VECTORS_PATH") or "var/agent/vectors.sqlite3"
-        ),
-        memory_import_chat_id=memory_import_chat_id,
-        live_memory_path=Path(
-            os.getenv("LIVE_MEMORY_PATH") or "var/agent/memory.sqlite3"
-        ),
     )

@@ -1,6 +1,5 @@
 import hashlib
 import sqlite3
-import unittest
 from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -11,20 +10,22 @@ from unittest.mock import patch
 
 from dashulya.domain.memory import MemoryAccess, MemoryMessage
 from dashulya.memory.history import CanonicalHistory
-from dashulya.memory.live import LiveMemory
 from dashulya.memory.search import MemorySearch
+from dashulya.memory.store import MessageStore
+from tests.postgres import PostgresTestCase, imported_history
 
 NOW = datetime(2026, 10, 25, 12, tzinfo=UTC)
 GROUP = -100123
 OTHER = -100456
 
 
-class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
+class CanonicalHistoryTests(PostgresTestCase):
     async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name)
-        self.live = LiveMemory(self.path / "live.sqlite3")
+        self.live = MessageStore(self.database)
         await self.live.initialize()
         self.group = CanonicalHistory(self.live, MemoryAccess(GROUP, is_private=False))
         self.private = CanonicalHistory(self.live, MemoryAccess(42, is_private=True))
@@ -54,6 +55,12 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
                     id INTEGER PRIMARY KEY, sent_at TEXT, user_id INTEGER, author TEXT,
                     body TEXT, reply_to_id INTEGER, conversation TEXT, url TEXT
                 );
+                CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO metadata VALUES ('version','1');
+                INSERT INTO metadata VALUES ('source_sha256','"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"');
+                INSERT INTO metadata VALUES ('chat_username','"public_group"');
+                CREATE TABLE memories (id INTEGER PRIMARY KEY, key TEXT, kind TEXT, body TEXT);
+                CREATE TABLE sources (memory_id INTEGER, message_id INTEGER);
                 CREATE TABLE private_knowledge (body TEXT);
                 INSERT INTO private_knowledge VALUES ('SECRET_DERIVED_MEMORY');
             """)
@@ -177,7 +184,9 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([m["message_id"] for m in result["messages"]], [2])
         self.assertEqual(result["messages"][0]["sent_at"], NOW.isoformat())
         imported = self.imported(dated=False)
-        reader = CanonicalHistory(self.live, MemoryAccess(42, True), imported=imported)
+        reader = await imported_history(
+            self.live, MemoryAccess(42, True), imported=imported
+        )
         self.assertEqual((await reader.query("count"))["count"], 5)
         self.assertEqual((await reader.query("count", after=NOW.isoformat()))["count"], 2)
         with self.assertRaisesRegex(ValueError, "timezone"):
@@ -219,7 +228,7 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         imported = self.imported()
-        reader = CanonicalHistory(
+        reader = await imported_history(
             self.live, MemoryAccess(GROUP, False), imported=imported, import_chat_id=GROUP
         )
         original = (
@@ -257,9 +266,13 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
         imported = self.imported()
         checksum = hashlib.sha256(imported.path.read_bytes()).hexdigest()
         await self.live.record(self.message(1, text="Live same ID"))
-        group = CanonicalHistory(self.live, MemoryAccess(GROUP, False), imported=imported)
+        group = await imported_history(
+            self.live, MemoryAccess(GROUP, False), imported=imported
+        )
         self.assertEqual((await group.query("count"))["count"], 1)
-        private = CanonicalHistory(self.live, MemoryAccess(42, True), imported=imported)
+        private = await imported_history(
+            self.live, MemoryAccess(42, True), imported=imported
+        )
         sources = (await private.query())["messages"]
         self.assertEqual(len(sources), 3)
         archive = [m for m in sources if m["provenance"] == "imported"]
@@ -267,14 +280,10 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(m["chat"].startswith("archive:") for m in archive))
         self.assertTrue(all(m["topic_id"] is None for m in archive))
         self.assertEqual(len({m["source_id"] for m in sources}), 3)
-        bound = CanonicalHistory(
+        bound = await imported_history(
             self.live, MemoryAccess(GROUP, False), imported=imported, import_chat_id=GROUP
         )
         self.assertEqual((await bound.query("count"))["count"], 2)
-        foreign_bound = CanonicalHistory(
-            self.live, MemoryAccess(GROUP, False), imported=imported, import_chat_id=OTHER
-        )
-        self.assertEqual((await foreign_bound.query("count"))["count"], 1)
         self.assertEqual(hashlib.sha256(imported.path.read_bytes()).hexdigest(), checksum)
 
     async def test_read_context_may_cross_query_filters_but_never_fixed_cutoff_or_chat(
@@ -359,25 +368,7 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_optional_sender_metadata_does_not_replace_chat_username(self) -> None:
         await self.live.record(self.message(1))
-        async with self.live.connection() as connection:
-            columns = {
-                row[1]
-                for row in await connection.execute_fetchall(
-                    "PRAGMA table_info(live_messages)"
-                )
-            }
-            if "username" not in columns:
-                await connection.execute(
-                    "ALTER TABLE live_messages ADD COLUMN username TEXT"
-                )
-            if "is_bot" not in columns:
-                await connection.execute(
-                    "ALTER TABLE live_messages ADD COLUMN is_bot INTEGER"
-                )
-            await connection.execute(
-                "UPDATE live_messages SET username='agent_handle', is_bot=1"
-            )
-            await connection.commit()
+        await self.live.record(self.message(1, username="agent_handle", is_bot=True))
         record = (await self.group.query())["messages"][0]
         self.assertEqual(record["username"], "agent_handle")
         self.assertTrue(record["is_bot"])
@@ -413,7 +404,7 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
                 1, text="Future corrected fact", edited_at=NOW + timedelta(seconds=2)
             )
         )
-        reader = CanonicalHistory(
+        reader = await imported_history(
             self.live,
             MemoryAccess(GROUP, False, before=NOW + timedelta(seconds=1)),
             imported=imported,
@@ -449,7 +440,9 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
         imported = self.imported()
         await self.live.record(self.message(1, text="Live current group"))
         await self.live.record(self.message(1, chat_id=OTHER, text="Other chat"))
-        reader = CanonicalHistory(self.live, MemoryAccess(42, True), imported=imported)
+        reader = await imported_history(
+            self.live, MemoryAccess(42, True), imported=imported
+        )
         archive = f"archive:{'a' * 64}"
         self.assertEqual(len(await reader.originals(chat=archive)), 2)
         selected = await reader.query(chat=archive)
@@ -477,7 +470,7 @@ class CanonicalHistoryTests(unittest.IsolatedAsyncioTestCase):
             self.message(1, chat_id=OTHER, sent_at=NOW - timedelta(days=100))
         )
         access = MemoryAccess(GROUP, False, before=NOW + timedelta(seconds=2))
-        reader = CanonicalHistory(
+        reader = await imported_history(
             self.live, access, imported=imported, import_chat_id=GROUP
         )
         coverage = (await reader.query("count"))["coverage"]

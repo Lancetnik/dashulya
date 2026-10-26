@@ -1,6 +1,3 @@
-import unittest
-from contextlib import closing
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
@@ -12,6 +9,7 @@ from dashulya.domain.groups import Group, GroupRegistry
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.storage.groups import GroupStore
+from tests.postgres import PostgresTestCase
 from tests.support import (
     TEST_API_KEY,
     BotOverride,
@@ -27,8 +25,9 @@ GROUP_CHAT: dict[str, Any] = {"id": -123, "type": "group", "title": "Test group"
 PRIVATE_CHAT: dict[str, Any] = {"id": 42, "type": "private", "first_name": "Test"}
 
 
-class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
+class GroupTrackingTests(PostgresTestCase):
     async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.bot = Bot(BOT_TOKEN)
@@ -51,7 +50,6 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
                 bot_token=BOT_TOKEN,
                 openai_api_key=TEST_API_KEY,
                 owner_user_id=USER["id"],
-                database_path=Path(self.directory.name) / "groups.sqlite3",
             ),
             BotOverride(self.bot),
             RecorderOverride(),
@@ -112,7 +110,7 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_list_and_private_chats_are_not_registered(self) -> None:
         await self.message("/groups")
         self.assertIn("I don't know of any groups yet", self.last_reply())
-        self.assertEqual(self.groups.list_groups(), [])
+        self.assertEqual(await self.groups.list_groups(), [])
 
     async def test_join_lists_groups_with_names_usernames_and_ids(self) -> None:
         await self.membership()
@@ -133,7 +131,7 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
     async def test_existing_group_is_registered_before_answering_command(self) -> None:
         await self.message("/groups@dashulya_bot", chat=GROUP_CHAT)
         self.assertIn("Test group (ID: -123)", self.last_reply())
-        self.assertEqual(len(self.groups.list_groups()), 1)
+        self.assertEqual(len(await self.groups.list_groups()), 1)
 
     async def test_messages_refresh_metadata_without_duplicate_groups(self) -> None:
         await self.membership(chat={**GROUP_CHAT, "username": "old_name"})
@@ -141,7 +139,7 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
         await self.message(
             "Another message", chat={**GROUP_CHAT, "title": "Renamed group"}
         )
-        self.assertEqual(self.groups.list_groups(), [Group(-123, "Renamed group")])
+        self.assertEqual(await self.groups.list_groups(), [Group(-123, "Renamed group")])
         self.requests.assert_not_awaited()
 
     async def test_leaving_or_being_kicked_removes_group_and_rejoining_restores_it(
@@ -155,7 +153,9 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
                 await self.message("/groups")
                 self.assertIn("I don't know of any groups yet", self.last_reply())
                 await self.membership()
-                self.assertEqual(self.groups.list_groups(), [Group(-123, "Test group")])
+                self.assertEqual(
+                    await self.groups.list_groups(), [Group(-123, "Test group")]
+                )
 
     async def test_restricted_membership_uses_is_member(self) -> None:
         permissions: dict[str, Any] = dict.fromkeys(
@@ -180,25 +180,27 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
             False,
         )
         await self.membership("restricted", is_member=True, until_date=0, **permissions)
-        self.assertEqual(self.groups.list_groups(), [Group(-123, "Test group")])
+        self.assertEqual(await self.groups.list_groups(), [Group(-123, "Test group")])
         await self.membership("restricted", is_member=False, until_date=0, **permissions)
-        self.assertEqual(self.groups.list_groups(), [])
+        self.assertEqual(await self.groups.list_groups(), [])
 
     async def test_private_and_channel_membership_updates_are_ignored(self) -> None:
         await self.membership(chat=PRIVATE_CHAT)
         await self.membership(chat={"id": -100789, "type": "channel", "title": "News"})
-        self.assertEqual(self.groups.list_groups(), [])
+        self.assertEqual(await self.groups.list_groups(), [])
 
     async def test_migration_replaces_old_group_in_both_service_messages(self) -> None:
         await self.membership()
         await self.message(chat=GROUP_CHAT, migrate_to_chat_id=-100456)
-        self.assertEqual(self.groups.list_groups(), [Group(-100456, "Test group")])
+        self.assertEqual(await self.groups.list_groups(), [Group(-100456, "Test group")])
         await self.message(
             chat={"id": -100456, "type": "supergroup", "title": "Upgraded group"},
             migrate_from_chat_id=-123,
         )
         await self.message("/groups")
-        self.assertEqual(self.groups.list_groups(), [Group(-100456, "Upgraded group")])
+        self.assertEqual(
+            await self.groups.list_groups(), [Group(-100456, "Upgraded group")]
+        )
         self.assertNotIn("ID: -123", self.last_reply())
 
     async def test_incoming_migration_alone_removes_old_group(self) -> None:
@@ -207,7 +209,9 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
             chat={"id": -100456, "type": "supergroup", "title": "Upgraded group"},
             migrate_from_chat_id=-123,
         )
-        self.assertEqual(self.groups.list_groups(), [Group(-100456, "Upgraded group")])
+        self.assertEqual(
+            await self.groups.list_groups(), [Group(-100456, "Upgraded group")]
+        )
 
     async def test_existing_commands_still_work(self) -> None:
         await self.message("/start")
@@ -228,36 +232,26 @@ class GroupTrackingTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
-class GroupPersistenceTests(unittest.TestCase):
-    def test_groups_survive_reopening_database(self) -> None:
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "nested" / "groups.sqlite3"
-            with closing(GroupStore(path)) as groups:
-                groups.remember(Group(-123, "Test group", "test_group"))
-            with closing(GroupStore(path)) as groups:
-                self.assertEqual(
-                    groups.list_groups(), [Group(-123, "Test group", "test_group")]
-                )
-                groups.forget(-123)
-            with closing(GroupStore(path)) as groups:
-                self.assertEqual(groups.list_groups(), [])
+class GroupPersistenceTests(PostgresTestCase):
+    async def test_groups_survive_reopening_database(self) -> None:
+        groups = GroupStore(self.database)
+        await groups.remember(Group(-123, "Test group", "test_group"))
+        reopened = GroupStore(self.database)
+        self.assertEqual(
+            await reopened.list_groups(), [Group(-123, "Test group", "test_group")]
+        )
+        await reopened.forget(-123)
+        self.assertEqual(await groups.list_groups(), [])
 
-    def test_large_group_list_is_split_without_losing_entries(self) -> None:
+    async def test_large_group_list_is_split_without_losing_entries(self) -> None:
         groups = [Group(-index, f"{index}: " + "💋" * 120) for index in range(1, 101)]
-        with (
-            TemporaryDirectory() as directory,
-            closing(GroupStore(Path(directory) / "groups.db")) as store,
-        ):
-            for group in groups:
-                store.remember(group)
-            messages = list(GroupRegistry(store).messages())
+        store = GroupStore(self.database)
+        for group in groups:
+            await store.remember(group)
+        messages = await GroupRegistry(store).messages()
         self.assertGreater(len(messages), 1)
         for message in messages:
             self.assertLessEqual(len(message.encode("utf-16-le")) // 2, 4096)
         all_text = "\n".join(messages)
         for group in groups:
             self.assertEqual(all_text.count(f"(ID: {group.chat_id})"), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -23,7 +23,7 @@ class TrackGroupsMiddleware(BaseMiddleware):
         # This middleware is registered on the message observer.
         assert isinstance(event, Message)
         if event.chat.type in GROUP_TYPES:
-            self._groups.observe(
+            await self._groups.observe(
                 Group(
                     event.chat.id,
                     event.chat.title or "Untitled group",

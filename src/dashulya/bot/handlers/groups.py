@@ -10,7 +10,7 @@ from dashulya.domain.groups import Group, GroupRegistry
 
 @inject
 async def list_groups(message: Message, groups: FromDishka[GroupRegistry]) -> None:
-    for text in groups.messages():
+    for text in await groups.messages():
         await message.answer(text)
 
 
@@ -24,7 +24,7 @@ async def track_membership(
         ChatMemberStatus.ADMINISTRATOR,
         ChatMemberStatus.MEMBER,
     } or (member.status == ChatMemberStatus.RESTRICTED and member.is_member)
-    groups.membership(
+    await groups.membership(
         Group(event.chat.id, event.chat.title or "Untitled group", event.chat.username),
         present=is_member,
     )

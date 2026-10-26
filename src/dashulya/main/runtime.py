@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from urllib.parse import urlsplit
 
 from aiogram import Bot, Dispatcher
 
@@ -22,7 +23,7 @@ async def run(settings: Settings) -> None:
             "Bot starting",
             extra={
                 "model": settings.openai_model,
-                "memory_backend": "hybrid",
+                "memory_backend": "pgvector",
             },
         )
         bot = await container.get(Bot)
@@ -51,7 +52,8 @@ def main() -> None:
         secrets=(
             settings.bot_token,
             settings.openai_api_key,
-            settings.openviking_api_key,
+            settings.database_url,
+            urlsplit(settings.database_url).password or "",
         ),
     )
     try:
