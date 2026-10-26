@@ -57,9 +57,9 @@ jobs:
           version: "0.12.1"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-      - name: Install test dependencies
-        run: uv sync --locked --no-dev --group memory-eval
+      - name: Install runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Run tests
-        run: uv run --locked --no-dev --group memory-eval python -m unittest discover -s tests -v
+        run: uv run --locked --no-dev python -m unittest discover -s tests -v
       - name: Build source and wheel distributions
         run: uv build --no-sources

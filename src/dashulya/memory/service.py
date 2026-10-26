@@ -138,13 +138,11 @@ class HybridChatMemory:
         await self.live.indexed(pending)
         self._needs_refresh = False
 
-    async def start(self, *, require_ready: bool = False) -> None:
+    async def start(self) -> None:
         await self.vectors.initialize()
         try:
             await self.refresh_once()
         except Exception as error:
-            if require_ready:
-                raise
             logger.warning("Memory indexing pending (%s)", type(error).__name__)
         self._worker = asyncio.create_task(self._run(), name="memory-embeddings")
 

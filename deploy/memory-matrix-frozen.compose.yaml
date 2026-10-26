@@ -1,7 +1,0 @@
-# Evaluations use a fixed source snapshot while implementation work continues.
-services:
-  evaluator:
-    volumes:
-      - ./evals/runs/memory/matrix-v3/frozen-code/src:/app/src:ro
-      - ./evals/runs/memory/matrix-v3/frozen-code/evals/suites:/app/evals/suites:ro
-      - ./evals/runs/memory/matrix-v3/frozen-code/deploy/openviking.conf:/app/deploy/openviking.conf:ro

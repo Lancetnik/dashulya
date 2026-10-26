@@ -161,12 +161,6 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(await self.live.pending()), 1)
         await self.service.close()
 
-    async def test_benchmark_startup_requires_complete_dense_preparation(self) -> None:
-        await self.live.record(self.message(-1001, "Persisted original"))
-        self.embed.side_effect = RuntimeError("embedding unavailable")
-        with self.assertRaises(RuntimeError):
-            await self.service.start(require_ready=True)
-
     async def test_private_chat_selection_applies_before_engine_creation_and_cap(
         self,
     ) -> None:

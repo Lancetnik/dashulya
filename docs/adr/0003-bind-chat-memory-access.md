@@ -16,5 +16,5 @@ uncover obsolete snapshot text. Prior edit versions remain unavailable.
 
 This replaces the unscoped access behavior described with the original
 [OpenViking prototype](0001-openviking-memory.md), independently of the retrieval
-engine selected by the comparative benchmark. Owner authorization and per-topic
+engine. Owner authorization and per-topic
 reply-context selection retain their existing responsibilities.

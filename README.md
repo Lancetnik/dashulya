@@ -60,9 +60,8 @@ history reads remain available during embedding outages. A semantic-query
 failure is reported through the tool rather than silently claiming a complete
 search. Historical backfill, maintained-fact writes/corrections, deletion
 synchronization, full memory continuity across group migrations and web search
-are not implemented. The [comparison record](evals/suites/memory/RESULTS.md)
-separates engine comparisons from actual application validation;
-[ADR 0004](docs/adr/0004-select-source-hybrid-memory.md) records the selected variant.
+are not implemented. [ADR 0004](docs/adr/0004-select-source-hybrid-memory.md)
+records the backend decision.
 
 ## Commands
 

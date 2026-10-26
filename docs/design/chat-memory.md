@@ -3,12 +3,10 @@
 The current runtime uses `HybridChatMemory`: canonical SQLite originals with
 BM25 keyword recall and cached dense embeddings. It exposes two independent
 read tools, `search_memory` and `chat_history`.
-[ADR 0004](../adr/0004-select-source-hybrid-memory.md) records the owner's
-selection; the [comparison record](../../evals/suites/memory/RESULTS.md) separates
-engine comparison from application validation. [ADR 0001](../adr/0001-openviking-memory.md)
-records the earlier OpenViking pilot, whose 18 queries do not establish
-full-corpus answer quality. [ADR 0003](../adr/0003-bind-chat-memory-access.md)
-governs source authority independently of engine selection.
+[ADR 0004](../adr/0004-select-source-hybrid-memory.md) records the backend
+decision and supersedes the earlier OpenViking selection.
+[ADR 0003](../adr/0003-bind-chat-memory-access.md) governs source authority
+independently of ranking.
 
 ```mermaid
 flowchart LR

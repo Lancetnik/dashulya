@@ -56,7 +56,7 @@ lock-check:
 
 # Run tests without contacting Telegram or OpenAI.
 test:
-    uv run --locked --no-dev --group memory-eval python -m unittest discover -s tests -v
+    uv run --locked python -m unittest discover -s tests -v
 
 # Run all development checks.
 check: lock-check hygiene secrets typos lint mypy import-linter test
