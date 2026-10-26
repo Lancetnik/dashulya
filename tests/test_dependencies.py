@@ -20,7 +20,7 @@ from dishka_ag2 import AG2Scope, FromDishka, inject
 
 from dashulya.ai.agents.models import AgentModels
 from dashulya.ai.dialogue import Dialogue
-from dashulya.domain.memory import MemoryBackend
+from dashulya.domain.memory import ChatMemoryService
 from dashulya.domain.messages import Reply
 from dashulya.main import create_container, run
 from dashulya.main.config import Settings
@@ -139,10 +139,12 @@ class DependencyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIs(await event.get(Agent[Reply]), reply)
                 self.assertIs(await event.get(Agent[bool]), decision)
                 self.assertIs(await event.get(Dialogue), dialogue)
-        memory = await container.get(MemoryBackend)
+        memory = await container.get(ChatMemoryService)
         async with container() as event:
-            self.assertIs(await event.get(MemoryBackend), memory)
-        self.assertEqual([tool.name for tool in reply.tools], ["search_memory"])
+            self.assertIs(await event.get(ChatMemoryService), memory)
+        self.assertEqual(
+            [tool.name for tool in reply.tools], ["search_memory", "chat_history"]
+        )
         self.assertEqual(await (await reply.ask("Hello")).content(), Reply("Hello"))
         self.assertTrue(await (await decision.ask("Addressed?")).content())
 
@@ -289,10 +291,14 @@ class DependencyTests(unittest.IsolatedAsyncioTestCase):
             await run(settings)
         close.assert_awaited_once()
 
-    async def test_missing_memory_stops_startup_before_telegram_polling(self) -> None:
+    async def test_bound_missing_import_stops_startup_before_telegram_polling(
+        self,
+    ) -> None:
         marker = Path(self.directory.name) / "ready"
         marker.write_text("stale")
-        settings = replace(self.settings, healthcheck_path=marker)
+        settings = replace(
+            self.settings, healthcheck_path=marker, memory_import_chat_id=-100123
+        )
         container = create_container(settings)
         with (
             patch("dashulya.main.runtime.create_container", return_value=container),

@@ -136,6 +136,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
             user_id=42,
             user_name="Anna",
             sent_at=datetime.fromtimestamp(1700000000, UTC),
+            message_id=1,
             group_context=None,
         )
         self.decision_agent.ask.assert_not_awaited()

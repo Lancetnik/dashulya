@@ -40,7 +40,7 @@ type = layers
 containers =
     dashulya.ai
 layers =
-    agents | dialogue | addressing
+    agents | dialogue | addressing | embeddings
     tools
     prompts
 exhaustive = True

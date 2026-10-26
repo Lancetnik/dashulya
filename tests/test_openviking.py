@@ -3,7 +3,6 @@ import json
 import sqlite3
 import unittest
 from contextlib import closing
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,16 +11,13 @@ from unittest.mock import patch
 
 import httpx
 
-from dashulya.domain.memory import MemoryBackend, MemoryMessage
-from dashulya.main import create_container
-from dashulya.main.config import Settings
+from dashulya.domain.memory import MemoryMessage
 from dashulya.memory.index import build_memory
 from dashulya.memory.live import LiveMemory
 from dashulya.memory.openviking import OpenVikingMemory
 from dashulya.memory.openviking_index import export_resources, reconcile_resources
 from dashulya.memory.search import MemorySearch
 from evals.suites.openviking.runner import compare, ingest_export, sample_index
-from tests.support import TEST_API_KEY
 
 
 class OpenVikingTests(unittest.IsolatedAsyncioTestCase):
@@ -198,31 +194,21 @@ class OpenVikingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["hits"], [])
         self.assertEqual(result["coverage"]["live"]["pending_count"], 1)
 
-    async def test_production_provider_requires_ready_openviking_and_never_selects_fts(
+    async def test_native_adapter_requires_ready_corpus_and_completed_manifest(
         self,
     ) -> None:
-        self.backend()
-        settings = Settings(
-            bot_token="123:TEST",
-            openai_api_key=TEST_API_KEY,
-            owner_user_id=42,  # pragma: allowlist secret -- Fake credential.
-            memory_path=self.index,
-            live_memory_path=self.index.parent / "live.sqlite3",
-            openviking_manifest=self.manifest,
-            openviking_url="http://test",
-        )
-        async with create_container(settings) as container:
-            memory = await container.get(MemoryBackend)
-            self.assertIsInstance(memory, OpenVikingMemory)
+        backend = self.backend()
+        await backend.check_ready()
         self.assertEqual(
             [r["path"] for r in self.requests[:2] if "path" in r],
             ["/health", "/api/v1/fs/stat"],
         )
-        async with create_container(
-            replace(settings, openviking_manifest=self.index.parent / "missing.json")
-        ) as container:
-            with self.assertRaisesRegex(ValueError, "OPENVIKING_MANIFEST"):
-                await container.get(MemoryBackend)
+        with self.assertRaises(FileNotFoundError):
+            OpenVikingMemory(
+                await MemorySearch.open(self.index),
+                self.index.parent / "missing.json",
+                url="http://test",
+            )
 
     async def test_unavailable_server_blocks_startup_and_hides_provider_errors(
         self,

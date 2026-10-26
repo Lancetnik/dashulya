@@ -12,7 +12,7 @@ class Settings:
     bot_token: str = field(repr=False)
     openai_api_key: str = field(repr=False)
     owner_user_id: int
-    openai_model: str = "gpt-5.6-luna"
+    openai_model: str = "gpt-6-luna"
     openai_decision_model: str = "gpt-6-luna"
     database_path: Path = Path("var/agent/dashulya.sqlite3")
     memory_path: Path = Path("var/agent/evidence.sqlite3")
@@ -23,6 +23,8 @@ class Settings:
     openviking_api_key: str = field(default="", repr=False)
     healthcheck_path: Path | None = None
     live_memory_path: Path = Path("var/agent/memory.sqlite3")
+    memory_vectors_path: Path = Path("var/agent/vectors.sqlite3")
+    memory_import_chat_id: int | None = None
 
 
 def load_settings() -> Settings:
@@ -60,11 +62,20 @@ def load_settings() -> Settings:
             "BOT_TIMEZONE must be a valid IANA timezone, such as Europe/Moscow."
         )
         raise ValueError(error_message) from None
+    import_chat = os.getenv("MEMORY_IMPORT_CHAT_ID", "").strip()
+    try:
+        memory_import_chat_id = int(import_chat) if import_chat else None
+    except ValueError:
+        error_message = "MEMORY_IMPORT_CHAT_ID must be a nonzero Telegram chat ID."
+        raise ValueError(error_message) from None
+    if memory_import_chat_id == 0:
+        error_message = "MEMORY_IMPORT_CHAT_ID must be a nonzero Telegram chat ID."
+        raise ValueError(error_message)
     return Settings(
         bot_token=token,
         openai_api_key=api_key,
         owner_user_id=owner_user_id,
-        openai_model=os.getenv("OPENAI_MODEL", "").strip() or "gpt-5.6-luna",
+        openai_model=os.getenv("OPENAI_MODEL", "").strip() or "gpt-6-luna",
         openai_decision_model=os.getenv("OPENAI_DECISION_MODEL", "").strip()
         or "gpt-6-luna",
         database_path=Path(os.getenv("DATABASE_PATH") or "var/agent/dashulya.sqlite3"),
@@ -79,6 +90,10 @@ def load_settings() -> Settings:
         healthcheck_path=Path(value)
         if (value := os.getenv("HEALTHCHECK_PATH"))
         else None,
+        memory_vectors_path=Path(
+            os.getenv("MEMORY_VECTORS_PATH") or "var/agent/vectors.sqlite3"
+        ),
+        memory_import_chat_id=memory_import_chat_id,
         live_memory_path=Path(
             os.getenv("LIVE_MEMORY_PATH") or "var/agent/memory.sqlite3"
         ),

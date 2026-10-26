@@ -1,0 +1,34 @@
+# Extend memory-eval.compose.yaml; this service has its own workspace and no host port.
+services:
+  evaluator:
+    environment:
+      OPENVIKING_URL: http://openviking-baseline:1933
+      OPENVIKING_API_KEY: ${OPENVIKING_API_KEY:?Set OPENVIKING_API_KEY in .env}
+      MEMORY_EVAL_OPENVIKING_HTTP_TIMEOUT: "300"
+      BOT_TIMEZONE: ${BOT_TIMEZONE:-Europe/Moscow}
+    volumes:
+      - ./deploy/openviking.conf:/app/deploy/openviking.conf:ro
+
+  openviking-baseline:
+    image: ghcr.io/volcengine/openviking:v0.5.2
+    entrypoint: [openviking-server]
+    command: [--config, /etc/openviking/ov.conf]
+    mem_limit: 4g
+    cpus: 4
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
+      OPENAI_MODEL: ${MEMORY_EVAL_MODEL:-${OPENAI_MODEL:-gpt-6-luna}}
+      OPENVIKING_API_KEY: ${OPENVIKING_API_KEY:?Set OPENVIKING_API_KEY in .env}
+    volumes:
+      - ${MEMORY_EVAL_OPENVIKING_CONFIG:-./deploy/openviking.conf}:/etc/openviking/ov.conf:ro
+      - ./evals/runs/memory/openviking/server:/var/lib/openviking
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:1933/ready', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 30

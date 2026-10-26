@@ -14,8 +14,11 @@ async def capture_message(
     if_missing: bool = False,
     text: str | None = None,
     reply_to_id: int | None = None,
+    allow_private: bool = False,
 ) -> None:
-    if message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+    if message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP} and not (
+        allow_private and message.chat.type == ChatType.PRIVATE
+    ):
         return
     body = (
         text
@@ -58,7 +61,7 @@ async def capture_message(
             sent_at=message.date,
             author_id=sender.id if sender else None,
             author=author,
-            chat_title=message.chat.title or "Untitled group",
+            chat_title=message.chat.title or message.chat.full_name or "Untitled chat",
             chat_username=message.chat.username,
             thread_id=message.message_thread_id,
             reply_to_id=reply_to_id,
@@ -69,6 +72,10 @@ async def capture_message(
             if message.content_type not in {"text", "rich_message"}
             else None,
             update_id=update_id,
+            username=sender.username if sender else None,
+            is_bot=message.from_user.is_bot
+            if message.from_user is not None and message.sender_chat is None
+            else None,
         ),
         if_missing=if_missing,
     )

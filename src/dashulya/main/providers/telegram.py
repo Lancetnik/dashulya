@@ -14,6 +14,7 @@ from dashulya.bot.middlewares.memory import (
 )
 from dashulya.bot.replies import ReplyDelivery
 from dashulya.bot.router import create_router
+from dashulya.domain.memory import MessageRecorder
 from dashulya.main.config import Settings
 
 
@@ -21,12 +22,24 @@ class TelegramProvider(Provider):
     scope = AG2Scope.APP
 
     tracking = provide(TrackGroupsMiddleware)
-    capture = provide(CaptureMessagesMiddleware)
-    capture_sent = provide(CaptureSentMessagesMiddleware)
     delivery = provide(ReplyDelivery)
     # AiogramProvider uses Scope.REQUEST; both integrations share AG2Scope here.
     event = from_context(TelegramObject, scope=AG2Scope.REQUEST)
     middleware_data = from_context(AiogramMiddlewareData, scope=AG2Scope.REQUEST)
+
+    @provide
+    def capture(
+        self, recorder: MessageRecorder, settings: Settings
+    ) -> CaptureMessagesMiddleware:
+        return CaptureMessagesMiddleware(recorder, owner_user_id=settings.owner_user_id)
+
+    @provide
+    def capture_sent(
+        self, recorder: MessageRecorder, settings: Settings
+    ) -> CaptureSentMessagesMiddleware:
+        return CaptureSentMessagesMiddleware(
+            recorder, owner_user_id=settings.owner_user_id
+        )
 
     @provide
     async def bot(self, settings: Settings) -> AsyncIterator[Bot]:

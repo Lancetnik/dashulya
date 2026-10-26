@@ -4,12 +4,13 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import cast
 from zoneinfo import ZoneInfo
 
 from ag2 import Agent, MemoryStream
 from ag2.events import BaseEvent, ModelMessage, ModelRequest, ModelResponse, TextInput
 
-from dashulya.domain.memory import ChatHistory, MemoryMessage
+from dashulya.domain.memory import ChatHistory, MemoryAccess, MemoryMessage
 from dashulya.domain.messages import ConversationKey, Reply
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,9 @@ class Dialogue:
             user_name=message.author,
         )
         text += f"\nTelegram message ID: {message.message_id}"
+        username = f"@{message.username.lstrip('@')}" if message.username else "unknown"
+        text += f"\nTelegram username: {username}"
+        text += f"\nSender is bot: {str(message.is_bot).lower() if message.is_bot is not None else 'unknown'}"
         if message.reply_to_id is not None:
             text += f"\nReply to message ID: {message.reply_to_id}"
         if message.media_type:
@@ -124,6 +128,7 @@ class Dialogue:
         user_name: str,
         sent_at: datetime,
         group_context: dict[str, object] | None = None,
+        message_id: int | None = None,
     ) -> Reply:
         message = self._text(text, sent_at=sent_at, user_id=user_id, user_name=user_name)
         conversation = self._conversation(key)
@@ -132,10 +137,10 @@ class Dialogue:
             allowed_reply_ids: set[int] = set()
             current_message_id: int | None = None
             if group_context is not None:
-                message_id = group_context.get("message_id")
-                if not isinstance(message_id, int):
+                if not isinstance(group_context.get("message_id"), int):
                     error_message = "Group replies require a Telegram message ID."
                     raise ValueError(error_message)
+                message_id = cast("int", group_context["message_id"])
                 current_message_id = message_id
                 stream = MemoryStream()
                 allowed_reply_ids.add(message_id)
@@ -159,6 +164,16 @@ class Dialogue:
                     message,
                     stream=stream,
                     variables={"user_id": user_id, "chat_id": key[0]},
+                    dependencies={
+                        MemoryAccess: MemoryAccess(
+                            chat_id=key[0],
+                            is_private=key[0] > 0,
+                            before=sent_at,
+                            before_id=current_message_id
+                            if current_message_id is not None
+                            else message_id,
+                        )
+                    },
                 )
                 result = await reply.content()
             requested_target = result.reply_to_message_id if result is not None else None

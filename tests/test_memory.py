@@ -11,6 +11,7 @@ from ag2 import Agent, MemoryStream
 from ag2.events import ToolCallEvent, ToolResultEvent
 from ag2.testing import TestConfig, TrackingConfig
 
+from dashulya.domain.memory import MemoryAccess
 from dashulya.domain.messages import Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
@@ -246,7 +247,8 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         config = TrackingConfig(
             TestConfig(
                 ToolCallEvent(
-                    "search_memory", arguments=json.dumps({"query": "PostgreSQL"})
+                    "search_memory",
+                    arguments=json.dumps({"query": "PostgreSQL", "limit": 3}),
                 ),
                 reply_json("The choice was PostgreSQL: https://t.me/test_chat/2"),
             )
@@ -260,7 +262,11 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         agent = await container.get(Agent[Reply])
         stream = MemoryStream()
         reply = await (
-            await agent.ask("What database did we choose?", stream=stream)
+            await agent.ask(
+                "What database did we choose?",
+                stream=stream,
+                dependencies={MemoryAccess: MemoryAccess(42, True)},
+            )
         ).content()
         assert reply is not None
         self.assertIn("PostgreSQL", reply.text)
@@ -269,4 +275,4 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
         self.assertIn("https://t.me/test_chat/2", str(results[0].result))
         self.assertEqual(results[0].name, "search_memory")
-        self.assertEqual(len(config.calls[0].tools), 1)
+        self.assertEqual(len(config.calls[0].tools), 2)

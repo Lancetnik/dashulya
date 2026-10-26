@@ -54,7 +54,7 @@ class SettingsTests(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=True):
             settings = load_settings()
-            self.assertEqual(settings.openai_model, "gpt-5.6-luna")
+            self.assertEqual(settings.openai_model, "gpt-6-luna")
             self.assertEqual(settings.openai_api_key, "test-key")
             self.assertEqual(settings.log_path, Path("var/logs/dashulya.log"))
             os.environ["LOG_PATH"] = "custom/bot.log"
@@ -62,7 +62,7 @@ class SettingsTests(unittest.TestCase):
             os.environ["OPENAI_MODEL"] = "custom-model"
             self.assertEqual(load_settings().openai_model, "custom-model")
             os.environ["OPENAI_MODEL"] = " "
-            self.assertEqual(load_settings().openai_model, "gpt-5.6-luna")
+            self.assertEqual(load_settings().openai_model, "gpt-6-luna")
             self.assertEqual(settings.openai_decision_model, "gpt-6-luna")
             os.environ["OPENAI_DECISION_MODEL"] = " decision-model "
             self.assertEqual(load_settings().openai_decision_model, "decision-model")

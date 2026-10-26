@@ -52,6 +52,7 @@ class ReplyDelivery:
                     user_id=message.from_user.id,
                     user_name=message.from_user.full_name,
                     sent_at=message.date,
+                    message_id=message.message_id,
                     group_context=group_context,
                 )
                 text = reply.text

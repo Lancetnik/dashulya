@@ -60,6 +60,18 @@ class LiveMemory:
                 CREATE INDEX IF NOT EXISTS live_conversation
                     ON live_messages(chat_id, thread_id, message_id);
             """)
+            await connection.execute("BEGIN IMMEDIATE")
+            columns = {
+                row["name"]
+                for row in await _fetch(connection, "PRAGMA table_info(live_messages)")
+            }
+            migrations = {
+                "author_username": "ALTER TABLE live_messages ADD COLUMN author_username TEXT",
+                "is_bot": "ALTER TABLE live_messages ADD COLUMN is_bot INTEGER",
+            }
+            for name, sql in migrations.items():
+                if name not in columns:
+                    await connection.execute(sql)
             await connection.commit()
 
     async def context(
@@ -125,6 +137,8 @@ class LiveMemory:
                 else None,
                 media_type=row["media_type"],
                 update_id=row["update_id"],
+                username=row["author_username"],
+                is_bot=bool(row["is_bot"]) if row["is_bot"] is not None else None,
             )
             for row in rows
         ]
@@ -149,6 +163,8 @@ class LiveMemory:
             message.reply_to_id,
             edited_at,
             message.media_type,
+            message.username,
+            int(message.is_bot) if message.is_bot is not None else None,
         )
         async with self.connection() as connection:
             await connection.execute("BEGIN IMMEDIATE")
@@ -183,6 +199,8 @@ class LiveMemory:
                         "reply_to_id",
                         "edited_at",
                         "media_type",
+                        "author_username",
+                        "is_bot",
                     )
                 )
                 == content
@@ -193,14 +211,15 @@ class LiveMemory:
                     """
                     INSERT INTO live_messages (
                         chat_id, message_id, body, sent_at, author_id, author,
-                        thread_id, reply_to_id, edited_at, media_type, update_id,
-                        version_time, revision
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        thread_id, reply_to_id, edited_at, media_type,
+                        author_username, is_bot, update_id, version_time, revision
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(chat_id, message_id) DO UPDATE SET
                         body=excluded.body, sent_at=excluded.sent_at,
                         author_id=excluded.author_id, author=excluded.author,
                         thread_id=excluded.thread_id, reply_to_id=excluded.reply_to_id,
                         edited_at=excluded.edited_at, media_type=excluded.media_type,
+                        author_username=excluded.author_username, is_bot=excluded.is_bot,
                         update_id=excluded.update_id, version_time=excluded.version_time,
                         revision=excluded.revision, attempts=0, retry_at=0
                 """,
@@ -236,7 +255,7 @@ class LiveMemory:
     def block_key(row: dict[str, Any]) -> str:
         return f"telegram-block:{row['chat_id']}:{row['message_id'] // BLOCK_SIZE}"
 
-    async def pending(self, *, limit: int = 32) -> list[dict[str, Any]]:
+    async def pending(self, *, limit: int | None = 32) -> list[dict[str, Any]]:
         async with self.connection() as connection:
             rows = await _fetch(
                 connection,
@@ -246,7 +265,7 @@ class LiveMemory:
                 WHERE indexed_revision < revision AND retry_at <= ?
                 ORDER BY sent_at, chat_id, message_id LIMIT ?
             """,
-                (time.time(), limit),
+                (time.time(), -1 if limit is None else limit),
             )
         return [dict(row) for row in rows]
 
@@ -424,7 +443,7 @@ class LiveMemory:
     @staticmethod
     def evidence(row: dict[str, Any]) -> dict[str, Any]:
         chat_id, message_id = row["chat_id"], row["message_id"]
-        if row["username"]:
+        if chat_id < 0 and row["username"]:
             url = f"https://t.me/{row['username']}/{message_id}"
         elif str(chat_id).startswith("-100"):
             url = f"https://t.me/c/{str(chat_id)[4:]}/{message_id}"
@@ -437,6 +456,8 @@ class LiveMemory:
             "sent_at": row["sent_at"],
             "user_id": row["author_id"],
             "author": row["author"],
+            "username": row.get("author_username"),
+            "is_bot": bool(row["is_bot"]) if row.get("is_bot") is not None else None,
             "text": row["body"][:1200],
             "url": url,
             "reply_to_message_id": row["reply_to_id"],
@@ -450,4 +471,4 @@ class LiveMemory:
         # Source text is quoted evidence, never a user's instruction or preference.
         metadata = self.evidence(row)
         metadata.pop("text")
-        return f"# Telegram group message\n\n{row['body']}\n\n## Source metadata\n\n{json.dumps(metadata, ensure_ascii=False)}\n"
+        return f"# Telegram message\n\n{row['body']}\n\n## Source metadata\n\n{json.dumps(metadata, ensure_ascii=False)}\n"

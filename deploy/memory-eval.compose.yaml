@@ -1,0 +1,21 @@
+name: dashulya-memory-eval
+
+services:
+  evaluator:
+    build:
+      context: .
+      dockerfile: deploy/memory-eval.Dockerfile
+    image: dashulya-memory-eval:local
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
+      OPENAI_MODEL: ${MEMORY_EVAL_MODEL:-${OPENAI_MODEL:-gpt-6-luna}}
+      MEMORY_EVAL_JUDGE_MODEL: ${MEMORY_EVAL_JUDGE_MODEL:-${OPENAI_MODEL:-gpt-6-luna}}
+      EMBEDDING_MODEL: ${MEMORY_EVAL_EMBEDDING_MODEL:-text-embedding-3-small}
+      HINDSIGHT_URL: http://hindsight:8888
+      PYTHONPATH: /app/src:/app
+    volumes:
+      - ./src:/app/src:ro
+      - ./evals/suites:/app/evals/suites:ro
+      - ./evals/datasets/ostrikov/v1/messages.jsonl:/corpus/messages.jsonl:ro
+      - ./evals/datasets/ostrikov/v2/queries.jsonl:/inputs/queries.jsonl:ro
+      - ./evals/runs/memory:/runs

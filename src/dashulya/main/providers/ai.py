@@ -1,4 +1,4 @@
-from ag2 import Agent
+from ag2 import Agent, Context
 from ag2.middleware import Middleware
 from aiogram import Bot
 from dishka import AsyncContainer, Provider, provide
@@ -8,8 +8,15 @@ from dashulya.ai.addressing import GroupAddressing
 from dashulya.ai.agents.factory import create_decision_agent, create_reply_agent
 from dashulya.ai.agents.models import AgentModels, create_models
 from dashulya.ai.dialogue import Dialogue
+from dashulya.ai.tools.history import chat_history
 from dashulya.ai.tools.memory import search_memory
-from dashulya.domain.memory import ChatHistory, MemoryBackend
+from dashulya.domain.memory import (
+    ChatHistory,
+    ChatMemoryService,
+    HistoryReader,
+    MemoryAccess,
+    MemoryBackend,
+)
 from dashulya.domain.messages import Reply
 from dashulya.main.config import Settings
 
@@ -39,13 +46,41 @@ class AgentProvider(Provider):
         self,
         models: AgentModels,
         container: AsyncContainer,
-        memory: MemoryBackend,
+        memory: ChatMemoryService,
     ) -> Agent[Reply]:
         return create_reply_agent(
             models.reply,
-            tools=[search_memory],
+            tools=[search_memory, chat_history],
             middleware=[Middleware(DishkaAsyncMiddleware, container=container)],
         )
+
+    @provide(scope=AG2Scope.SESSION)
+    def memory_access(self, context: Context) -> MemoryAccess:
+        access = context.dependencies.get(MemoryAccess)
+        error_message = "Memory tools require trusted conversation access."
+        if type(access) is not MemoryAccess:
+            raise ValueError(error_message)
+        fields = vars(access)
+        if (
+            type(fields["chat_id"]) is not int
+            or type(fields["is_private"]) is not bool
+            or access.chat_id == 0
+            or access.is_private != (access.chat_id > 0)
+        ):
+            raise ValueError(error_message)
+        return access
+
+    @provide(scope=AG2Scope.SESSION)
+    def scoped_memory(
+        self, service: ChatMemoryService, access: MemoryAccess
+    ) -> MemoryBackend:
+        return service.recall(access)
+
+    @provide(scope=AG2Scope.SESSION)
+    def scoped_history(
+        self, service: ChatMemoryService, access: MemoryAccess
+    ) -> HistoryReader:
+        return service.history(access)
 
     @provide
     def dialogue(

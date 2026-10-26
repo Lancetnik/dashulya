@@ -4,5 +4,8 @@
 !README.md
 !src/
 !src/**
+!evals/
+!evals/suites/
+!evals/suites/**
 **/__pycache__/
 **/*.pyc
