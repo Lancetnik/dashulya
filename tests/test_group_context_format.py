@@ -1,10 +1,11 @@
+import json
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from dashulya.ai.group_context import format_group_context
-from dashulya.domain.memory import MemoryMessage
+from dashulya.domain.memory import MemoryMessage, TruncatedThread
 from tests.support import group_rows
 
 
@@ -148,3 +149,30 @@ class GroupContextFormatTests(unittest.TestCase):
                     sent_at=datetime(2026, 1, 1, tzinfo=UTC).replace(tzinfo=None),
                 )
             ])
+
+    def test_truncated_threads_are_navigation_metadata_without_extra_message_rows(
+        self,
+    ) -> None:
+        for root, source in [(1, "source:test:1"), (None, None)]:
+            with self.subTest(root=root):
+                rendered = format_group_context(
+                    [self.message(7)],
+                    timezone=ZoneInfo("Europe/Moscow"),
+                    bot_id=123,
+                    truncated_threads=[
+                        TruncatedThread(7, root, source),
+                        TruncatedThread(999, 42),
+                    ],
+                )
+                note = next(
+                    line
+                    for line in rendered[0]["text"].splitlines()
+                    if line.startswith("truncated_threads: ")
+                )
+                details = json.loads(note.removeprefix("truncated_threads: "))
+                self.assertEqual(set(details), {"7"})
+                self.assertEqual(details["7"]["root_id"], root)
+                self.assertEqual(details["7"].get("source_id"), source)
+                self.assertEqual(
+                    [row[0] for item in rendered for row in group_rows(item["text"])], [7]
+                )

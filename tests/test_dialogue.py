@@ -11,7 +11,7 @@ from ag2.testing import TestConfig, TrackingConfig
 
 from dashulya.ai.agents.factory import create_reply_agent
 from dashulya.ai.dialogue import Dialogue
-from dashulya.domain.memory import ChatHistory, MemoryMessage
+from dashulya.domain.memory import ChatHistory, MemoryMessage, ReplyContext
 from dashulya.domain.messages import ConversationKey, Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
@@ -35,7 +35,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             owner_user_id=42,
         )
         self.history = AsyncMock(spec=ChatHistory)
-        self.history.context.return_value = []
+        self.history.context.return_value = ReplyContext()
         self.container = create_container(
             self.settings,
             MemoryOverride(history=self.history),
@@ -272,7 +272,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             await reading
 
     async def test_group_reply_preserves_send_time_and_quotes_reply_target(self) -> None:
-        self.history.context.return_value = [
+        self.history.context.return_value = ReplyContext((
             MemoryMessage(
                 chat_id=-123,
                 message_id=1,
@@ -282,8 +282,8 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
                 author="Dashulya",
                 chat_title="Group",
                 thread_id=7,
-            )
-        ]
+            ),
+        ))
         context: dict[str, object] = {
             "message_id": 2,
             "text": "What do you mean?",
@@ -313,7 +313,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
     async def test_group_turns_rebuild_history_and_keep_actual_bot_role(self) -> None:
         streams = []
         for number in (10, 11):
-            self.history.context.return_value = [
+            self.history.context.return_value = ReplyContext((
                 MemoryMessage(
                     chat_id=-123,
                     message_id=1,
@@ -352,7 +352,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
                     author="Anna",
                     chat_title="Group",
                 ),
-            ]
+            ))
             await self.dialogue.reply(
                 (-123, None),
                 f"Request {number}",
@@ -382,7 +382,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
     async def test_group_classifier_uses_observed_history_instead_of_ai_turns(
         self,
     ) -> None:
-        self.history.context.return_value = [
+        self.history.context.return_value = ReplyContext((
             MemoryMessage(
                 chat_id=-123,
                 message_id=1,
@@ -401,7 +401,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
                 author="Anna",
                 chat_title="Group",
             ),
-        ]
+        ))
         recent = await self.dialogue.recent_context((-123, None), through_message_id=2)
         self.assertEqual(len(recent), 2)
         self.assertEqual(recent[1]["role"], "assistant")
@@ -409,7 +409,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Current request", recent[0]["text"])
 
     async def test_reply_target_must_be_in_the_selected_group_context(self) -> None:
-        self.history.context.return_value = [
+        self.history.context.return_value = ReplyContext((
             MemoryMessage(
                 chat_id=-123,
                 message_id=1,
@@ -420,7 +420,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
                 chat_title="Group",
                 reply_to_id=999,
             ),
-        ]
+        ))
         for target, expected in (
             (None, None),
             (1, 1),

@@ -17,6 +17,7 @@ from dashulya.domain.memory import (
     ChatMemoryService,
     MemoryAccess,
     MemoryMessage,
+    ReplyContext,
 )
 from dashulya.domain.messages import ConversationKey, Reply
 
@@ -58,9 +59,7 @@ class Dialogue:
         async with self._conversation(key).delivery_lock:
             yield
 
-    async def _group_history(
-        self, key: ConversationKey, message_id: int
-    ) -> list[MemoryMessage]:
+    async def _group_history(self, key: ConversationKey, message_id: int) -> ReplyContext:
         if self._history is None:
             error_message = "Group replies require a chat history store."
             raise ValueError(error_message)
@@ -83,7 +82,8 @@ class Dialogue:
     async def _group_input(
         self, key: ConversationKey, current: MemoryMessage
     ) -> tuple[MemoryStream, str, set[int]]:
-        originals = await self._group_history(key, current.message_id)
+        context = await self._group_history(key, current.message_id)
+        originals = context.messages
         saved = next(
             (item for item in originals if item.message_id == current.message_id),
             current,
@@ -98,10 +98,13 @@ class Dialogue:
             if current.reply_to_id is not None
             else saved.reply_to_id,
         )
-        originals = [item for item in originals if item.message_id != current.message_id]
-        originals.append(current)
+        messages = [item for item in originals if item.message_id != current.message_id]
+        messages.append(current)
         rendered = format_group_context(
-            originals, timezone=self._timezone, bot_id=self._bot_id
+            messages,
+            timezone=self._timezone,
+            bot_id=self._bot_id,
+            truncated_threads=context.truncated_threads,
         )
         events: list[BaseEvent] = []
         for item in rendered[:-1]:
@@ -111,20 +114,22 @@ class Dialogue:
                 events.append(ModelRequest([TextInput(item["text"])]))
         stream = MemoryStream()
         await stream.history.replace(events)
-        return stream, rendered[-1]["text"], {item.message_id for item in originals}
+        return stream, rendered[-1]["text"], {item.message_id for item in messages}
 
     async def recent_context(
         self, key: ConversationKey, *, through_message_id: int | None = None
     ) -> list[dict[str, str]]:
         if through_message_id is not None:
+            context = await self._group_history(key, through_message_id)
             return format_group_context(
                 [
                     message
-                    for message in await self._group_history(key, through_message_id)
+                    for message in context.messages
                     if message.message_id != through_message_id
                 ],
                 timezone=self._timezone,
                 bot_id=self._bot_id,
+                truncated_threads=context.truncated_threads,
             )
         conversation = self._conversation(key)
         async with conversation.lock:

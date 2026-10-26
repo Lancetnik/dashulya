@@ -126,7 +126,7 @@ class MemoryMigrationTests(PostgresTestCase):
         original = await store.originals(MemoryAccess(GROUP, False))
         self.assertEqual([r.text for r in original], ["Archive parent", "Corrected text"])
         self.assertEqual(len(await store.originals(MemoryAccess(42, True))), 3)
-        context = await store.context((GROUP, None), 2, limit=1, parent_hops=5)
+        context = (await store.context((GROUP, None), 2, limit=1, parent_hops=5)).messages
         self.assertEqual([r.message_id for r in context], [1, 2])
         self.assertEqual(
             (await GroupStore(self.database).list_groups())[0].chat_id, GROUP

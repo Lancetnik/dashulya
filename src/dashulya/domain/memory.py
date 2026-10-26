@@ -6,6 +6,11 @@ from typing import Any, Protocol
 from dashulya.domain.messages import ConversationKey
 
 
+def message_source_id(collection: str, message_id: int) -> str:
+    key = hashlib.sha256(collection.encode()).hexdigest()[:24]
+    return f"source:{key}:{message_id}"
+
+
 @dataclass(frozen=True)
 class MemoryMessage:
     chat_id: int
@@ -23,6 +28,23 @@ class MemoryMessage:
     update_id: int = 0
     username: str | None = None
     is_bot: bool | None = None
+
+
+@dataclass(frozen=True)
+class TruncatedThread:
+    """A depth-cut boundary and the root established from saved reply links."""
+
+    boundary_id: int
+    root_id: int | None
+    source_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ReplyContext:
+    """Bounded source messages and navigation metadata for omitted ancestors."""
+
+    messages: tuple[MemoryMessage, ...] = ()
+    truncated_threads: tuple[TruncatedThread, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -48,8 +70,7 @@ class OriginalMessage:
 
     @property
     def source_id(self) -> str:
-        key = hashlib.sha256(self.collection.encode()).hexdigest()[:24]
-        return f"source:{key}:{self.message_id}"
+        return message_source_id(self.collection, self.message_id)
 
     @property
     def order(self) -> tuple[str, str, int]:
@@ -101,7 +122,7 @@ class ChatHistory(Protocol):
         *,
         limit: int,
         parent_hops: int,
-    ) -> list[MemoryMessage]: ...
+    ) -> ReplyContext: ...
 
 
 class MemoryBackend(Protocol):

@@ -17,6 +17,7 @@ from dashulya.domain.memory import (
     MemoryAccess,
     MemoryBackend,
     MessageRecorder,
+    ReplyContext,
 )
 
 
@@ -111,7 +112,7 @@ class MemoryOverride(Provider):
         self._memory = memory
         if history is None:
             history = AsyncMock(spec=ChatHistory)
-            history.context.return_value = []
+            history.context.return_value = ReplyContext()
         self._history = history
         if reader is None:
             reader = AsyncMock(spec=HistoryReader)

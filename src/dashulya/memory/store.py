@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from dashulya.database import Database
-from dashulya.domain.memory import MemoryAccess, MemoryMessage, OriginalMessage
+from dashulya.domain.memory import (
+    MemoryAccess,
+    MemoryMessage,
+    OriginalMessage,
+    ReplyContext,
+    TruncatedThread,
+    message_source_id,
+)
 from dashulya.domain.messages import ConversationKey
 
 
@@ -208,7 +215,7 @@ class MessageStore:
         *,
         limit: int,
         parent_hops: int,
-    ) -> list[MemoryMessage]:
+    ) -> ReplyContext:
         """None selects the whole chat, including legacy ordinary reply threads."""
         async with self.database.connection() as connection:
             cursor = await connection.execute(
@@ -226,8 +233,28 @@ class MessageStore:
                     WHERE a.depth<%(hops)s
                         AND (%(topic)s::bigint IS NULL OR parent.topic_id=%(topic)s)
                         AND parent.message_id<child.message_id AND parent.sent_at IS NOT NULL
-                ) SELECT m.* FROM messages m WHERE chat_id=%(chat)s
-                    AND message_id IN (SELECT message_id FROM ancestors) ORDER BY message_id""",
+                ), selected AS MATERIALIZED (
+                    SELECT message_id,min(depth) AS depth FROM ancestors GROUP BY message_id
+                ), boundaries AS (
+                    SELECT m.collection,m.message_id,m.reply_to_id FROM messages m
+                    JOIN selected s USING(message_id) WHERE m.chat_id=%(chat)s
+                        AND s.depth=%(hops)s AND m.reply_to_id<m.message_id
+                        AND NOT EXISTS(SELECT 1 FROM selected p WHERE p.message_id=m.reply_to_id)
+                ), lineage(boundary_id,collection,message_id,reply_to_id) AS (
+                    SELECT message_id,collection,message_id,reply_to_id FROM boundaries
+                    UNION ALL
+                    SELECT l.boundary_id,p.collection,p.message_id,p.reply_to_id
+                    FROM lineage l JOIN messages p
+                        ON p.collection=l.collection AND p.message_id=l.reply_to_id
+                    WHERE p.message_id<l.message_id AND p.sent_at IS NOT NULL
+                        AND (%(topic)s::bigint IS NULL OR p.topic_id=%(topic)s)
+                ), roots AS (
+                    SELECT boundary_id,min(message_id) FILTER(WHERE reply_to_id IS NULL) AS root_id
+                    FROM lineage GROUP BY boundary_id
+                ) SELECT m.*,r.boundary_id IS NOT NULL AS truncated,r.root_id
+                FROM messages m JOIN selected s USING(message_id)
+                LEFT JOIN roots r ON r.boundary_id=m.message_id
+                WHERE m.chat_id=%(chat)s ORDER BY m.message_id""",
                 {
                     "chat": key[0],
                     "topic": key[1],
@@ -237,26 +264,39 @@ class MessageStore:
                 },
             )
             rows = await cursor.fetchall()
-        return [
-            MemoryMessage(
-                chat_id=row["chat_id"],
-                message_id=row["message_id"],
-                text=row["body"],
-                sent_at=row["sent_at"],
-                author_id=row["author_id"],
-                author=row["author"],
-                chat_title=row["chat_title"],
-                chat_username=row["chat_username"],
-                thread_id=row["topic_id"],
-                reply_to_id=row["reply_to_id"],
-                edited_at=row["edited_at"],
-                media_type=row["media_type"],
-                update_id=row["update_id"],
-                username=row["author_username"],
-                is_bot=row["is_bot"],
-            )
-            for row in rows
-        ]
+        return ReplyContext(
+            tuple(
+                MemoryMessage(
+                    chat_id=row["chat_id"],
+                    message_id=row["message_id"],
+                    text=row["body"],
+                    sent_at=row["sent_at"],
+                    author_id=row["author_id"],
+                    author=row["author"],
+                    chat_title=row["chat_title"],
+                    chat_username=row["chat_username"],
+                    thread_id=row["topic_id"],
+                    reply_to_id=row["reply_to_id"],
+                    edited_at=row["edited_at"],
+                    media_type=row["media_type"],
+                    update_id=row["update_id"],
+                    username=row["author_username"],
+                    is_bot=row["is_bot"],
+                )
+                for row in rows
+            ),
+            tuple(
+                TruncatedThread(
+                    row["message_id"],
+                    row["root_id"],
+                    message_source_id(row["collection"], row["root_id"])
+                    if row["root_id"] is not None
+                    else None,
+                )
+                for row in rows
+                if row["truncated"]
+            ),
+        )
 
     async def pending(self, *, limit: int | None = 32) -> list[dict[str, Any]]:
         async with self.database.connection() as connection:

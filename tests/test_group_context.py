@@ -236,9 +236,11 @@ class GroupContextTests(PostgresTestCase):
         )
         self.assertIn("General discussion", rendered)
         self.assertNotIn("Other topic secret", rendered)
-        saved = await self.store.context(
-            (CHAT["id"], 1), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (CHAT["id"], 1), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual(saved[-1].message_id, self.sent[-1].message_id)
 
     async def test_passive_messages_and_delivered_bot_reply_reach_next_fresh_turn(
@@ -286,9 +288,9 @@ class GroupContextTests(PostgresTestCase):
         ]
         self.assertEqual(len(earlier_bot), 1)
         self.assertEqual(earlier_bot[0].to_api()["role"], "assistant")
-        saved = await self.store.context(
-            (-100123, 7), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context((-100123, 7), self.next_id, limit=20, parent_hops=5)
+        ).messages
         self.assertEqual([m.message_id for m in saved], [1, 2, 3, 4, 5])
         self.assertEqual(saved[2].reply_to_id, first.message_id)
         self.assertEqual(saved[-1].reply_to_id, second.message_id)
@@ -310,9 +312,11 @@ class GroupContextTests(PostgresTestCase):
                 "text": "Previous answer",
             },
         )
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual(saved[-1].message_id, self.sent[-1].message_id)
         self.assertEqual(saved[-1].text, "**Hello**")
         self.assertEqual(saved[-1].reply_to_id, 1)
@@ -336,9 +340,11 @@ class GroupContextTests(PostgresTestCase):
                     }
                 ],
             )
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual([m.author_id for m in saved], [42])
         sends = [
             call
@@ -373,9 +379,11 @@ class GroupContextTests(PostgresTestCase):
                     }
                 ],
             )
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual(
             [(m.author_id, m.text) for m in saved], [(42, "Dashulya"), (123, "Hello")]
         )
@@ -410,9 +418,11 @@ class GroupContextTests(PostgresTestCase):
                     }
                 ],
             )
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual(len(saved), 2)
         self.assertEqual(saved[-1].text, self.sent[-1].text)
         self.assertTrue(0 < len(saved[-1].text) <= 4096)
@@ -430,9 +440,11 @@ class GroupContextTests(PostgresTestCase):
                 }
             ],
         )
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual([m.author_id for m in saved], [42, 123])
         self.assertIn("Here's what I can do", saved[-1].text)
         self.ask.assert_not_awaited()
@@ -484,9 +496,9 @@ class GroupContextTests(PostgresTestCase):
         for send in sends:
             assert send.reply_parameters is not None
             self.assertEqual(send.reply_parameters.message_id, 1)
-        saved = await self.store.context(
-            (-100123, 7), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context((-100123, 7), self.next_id, limit=20, parent_hops=5)
+        ).messages
         self.assertEqual("".join(m.text for m in saved if m.author_id == 123), text)
         self.assertTrue(all(m.reply_to_id == 1 for m in saved if m.author_id == 123))
 
@@ -526,9 +538,11 @@ class GroupContextTests(PostgresTestCase):
         for send in sends:
             assert send.reply_parameters is not None
             self.assertEqual(send.reply_parameters.message_id, 1)
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual(saved[-1].text, "Answer")
         self.assertEqual(saved[-1].reply_to_id, 1)
 
@@ -559,9 +573,9 @@ class GroupContextTests(PostgresTestCase):
         ]
         assert sends[-1].reply_parameters is not None
         self.assertEqual(sends[-1].reply_parameters.message_id, trigger.message_id)
-        saved = await self.store.context(
-            (-100123, 7), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context((-100123, 7), self.next_id, limit=20, parent_hops=5)
+        ).messages
         self.assertEqual(saved[-1].reply_to_id, trigger.message_id)
 
     async def test_invalid_structured_output_uses_redacted_fallback(self) -> None:

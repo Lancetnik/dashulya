@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-from dashulya.domain.memory import MemoryMessage
+from dashulya.domain.memory import MemoryMessage, TruncatedThread
 
 if TYPE_CHECKING:
     from datetime import date
@@ -46,12 +46,29 @@ def _users(messages: Sequence[MemoryMessage], bot_id: int | None) -> str:
 
 
 def format_group_context(
-    messages: Sequence[MemoryMessage], *, timezone: ZoneInfo, bot_id: int | None
+    messages: Sequence[MemoryMessage],
+    *,
+    timezone: ZoneInfo,
+    bot_id: int | None,
+    truncated_threads: Sequence[TruncatedThread] = (),
 ) -> list[dict[str, str]]:
     """One roster followed by chronological compact entries with preserved roles."""
     if not messages:
         return []
     result = [{"role": "user", "text": _users(messages, bot_id)}]
+    visible_ids = {message.message_id for message in messages}
+    cuts = {
+        str(thread.boundary_id): {
+            "root_id": thread.root_id,
+            **({"source_id": thread.source_id} if thread.source_id is not None else {}),
+        }
+        for thread in truncated_threads
+        if thread.boundary_id in visible_ids
+    }
+    if cuts:
+        result[0]["text"] += "\n\ntruncated_threads: " + json.dumps(
+            cuts, separators=(",", ":")
+        )
     previous_day: date | None = None
     previous_offset: str | None = None
     for message in messages:

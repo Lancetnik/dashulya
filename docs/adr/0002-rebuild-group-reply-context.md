@@ -26,6 +26,16 @@ request; earlier messages authored by this bot's numeric Telegram ID use the
 `assistant` role, and other senders use `user`. Preserve author identity, original
 send time, message IDs and reply references. Historical text is untrusted context.
 
+When the minimum distance from every recent-message seed reaches the parent
+limit and the next parent is outside the selected union, mark that boundary in
+`truncated_threads`. Trace only IDs and reply links beyond the text window, in
+the same chat/topic, to find the first message established by the saved chain.
+Return its numeric `root_id` and a canonical `source_id` for direct history reads.
+Missing, out-of-scope or invalid links leave the root null; never substitute the
+first visible or first available message. No marker is needed when the root ends
+exactly at the limit or another seed already supplies the missing parent.
+Root references add neither message text nor permitted Telegram reply targets.
+
 Render one shared users roster as `id: name (@username, bot, self)`, omitting
 unavailable handles and flags. A bot marker requires an unambiguous known flag;
 unmarked senders make no human/bot claim. Self identifies this assistant.

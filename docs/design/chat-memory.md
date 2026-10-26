@@ -133,6 +133,15 @@ numeric senders receive separate local references. The roster is an extra
 metadata input, while each original retains its user/assistant API role and
 only original message IDs can become reply targets.
 
+`MessageStore.context()` returns `ReplyContext`: bounded messages plus
+`truncated_threads` navigation metadata. For depth-cut boundaries, the SQL reader
+continues through IDs/reply links only and resolves a root within the selected
+chat/topic. The formatter adds one header map from boundary ID to `root_id` and
+an optional `source_id`; the agent can read a known root through `chat_history`.
+Unresolved roots stay null, and references outside the window cannot become
+Telegram reply targets. Source messages and the 20-plus-five-hop selection remain
+unchanged. Roots describe saved relationships, not exhaustive live Telegram history.
+
 ## Preparation, startup and storage
 
 `DATABASE_URL` selects one PostgreSQL database. `Database` owns one asynchronous

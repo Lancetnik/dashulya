@@ -10,7 +10,7 @@ from ag2.config import OpenAIDecisionsConfig, OpenAIResponsesConfig
 
 from dashulya.ai.addressing import GroupAddressing
 from dashulya.ai.dialogue import Dialogue
-from dashulya.domain.memory import ChatHistory, MemoryMessage
+from dashulya.domain.memory import ChatHistory, MemoryMessage, ReplyContext
 from dashulya.domain.messages import GroupMessage, Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
@@ -31,7 +31,7 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         requests: list[dict[str, Any]] = []
         history = AsyncMock(spec=ChatHistory)
-        history.context.return_value = [
+        history.context.return_value = ReplyContext((
             MemoryMessage(
                 chat_id=-123,
                 message_id=1,
@@ -51,7 +51,7 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
                 chat_title="Group",
                 reply_to_id=1,
             ),
-        ]
+        ))
 
         def respond(request: httpx2.Request) -> httpx2.Response:
             requests.append(json.loads(request.content))

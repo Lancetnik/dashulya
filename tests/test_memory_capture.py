@@ -81,7 +81,9 @@ class MemoryCaptureTests(PostgresTestCase):
             restarted = MessageStore(self.database)
             await restarted.initialize()
             await restarted.initialize()
-            messages = await restarted.context((42, None), 1, limit=20, parent_hops=5)
+            messages = (
+                await restarted.context((42, None), 1, limit=20, parent_hops=5)
+            ).messages
             self.assertEqual(messages[0].username, "alice")
             self.assertIs(messages[0].is_bot, False)
 
