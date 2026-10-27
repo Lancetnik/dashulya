@@ -52,7 +52,7 @@ def create_reply_agent(
         config=config,
         response_schema=ResponseSchema(
             Reply,
-            description="Reply text with an optional target message ID, or one emoji reaction to the current request.",
+            description="Reply text with an optional target message ID; empty text after reaction tools when no further reply is needed.",
         ),
         middleware=[Middleware(ReplyTrace), *middleware],
     )

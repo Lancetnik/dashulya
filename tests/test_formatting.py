@@ -10,7 +10,6 @@ from aiogram.utils.formatting import sizeof
 
 from dashulya.bot.formatting import render_markdown
 from dashulya.bot.images import TelegramImages
-from dashulya.bot.reactions import TelegramReactions
 from dashulya.bot.replies import ReplyDelivery
 from dashulya.domain.messages import Reply
 
@@ -209,7 +208,6 @@ class ReplyFormattingTests(unittest.IsolatedAsyncioTestCase):
                 bot,
                 dialogue,
                 TelegramImages(bot, max_bytes=20_000_000),
-                TelegramReactions(bot),
             ).reply(incoming)
         sent = [
             c.args[1]
@@ -248,7 +246,6 @@ class ReplyFormattingTests(unittest.IsolatedAsyncioTestCase):
                 bot,
                 dialogue,
                 TelegramImages(bot, max_bytes=20_000_000),
-                TelegramReactions(bot),
             ).reply(incoming)
         messages = [
             c.args[1]

@@ -296,18 +296,7 @@ class Dialogue:
                     dependencies={MemoryAccess: access, ReactionTurn: reactions},
                 )
                 result = await reply.content()
-            if result is not None and not result.text.strip() and result.reaction:
-                if message_id in reactions.uncertain:
-                    validated = Reply("")
-                    target_reason = "reaction_tool_unconfirmed"
-                else:
-                    validated = Reply("", reaction=result.reaction.strip())
-                    target_reason = "reaction_current_request"
-            elif (
-                result is not None
-                and not result.text.strip()
-                and (reactions.delivered or reactions.uncertain)
-            ):
+            if result is not None and not result.text.strip() and reactions.attempted:
                 validated = Reply("")
                 target_reason = "reaction_tool_completed"
             elif result is None or not result.text.strip():

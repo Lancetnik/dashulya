@@ -92,23 +92,26 @@ from each turn's context and records metadata without arguments, results or
 conversation bodies. `Dialogue` binds tool authority without running an automatic
 recall; the agent chooses which tools to call.
 
-The reply agent has an AG2 `ResponseSchema[Reply]` for `text`, nullable
-`reply_to_message_id` and nullable `reaction`. `Dialogue` validates the parsed target against the same
+The reply agent has an AG2 `ResponseSchema[Reply]` for `text` and nullable
+`reply_to_message_id`. `Dialogue` validates the parsed target against the same
 group-context snapshot that seeded the stream; private replies retain the default
 target. The result crosses into `bot` as the domain's `Reply`, with no AG2 objects.
 
-An empty text with a reaction emoji requests a reaction on the triggering message.
-The application-scoped `TelegramReactions` implements the domain's
-`MessageReactions` interface for both final-response delivery and the injected
-`ai/tools/reactions.py` tool. `set_reaction` accepts only message ID and emoji;
+All reactions, including those on the triggering message, use the injected
+`ai/tools/reactions.py` tool. The application-scoped `TelegramReactions`
+implements the domain's `MessageReactions` interface for that tool.
+`set_reaction` accepts only message ID and emoji;
 it reads chat identity from the trusted AG2 `chat_id` Context Variable, with no
 model-facing chat override or reply-context target restriction. `Dialogue`
 passes a fresh `ReactionTurn` through AG2 dependencies for every ask. It owns
-per-turn delivery outcomes and serializes parallel reaction calls, allowing a
-successful tool-only turn to finish silently and suppressing retries of any
+per-turn attempts and unconfirmed deliveries and serializes parallel reaction
+calls, allowing a tool-only turn to finish silently and suppressing retries of any
 unconfirmed target. No mutable chat identity lives on the shared agent or service.
-Telegram errors become fixed result codes and redacted logs; cancellation
-propagates. Reactions create no synthetic delivered text messages in chat history.
+Telegram errors become fixed result codes returned to the agent and redacted
+logs; cancellation propagates. The tool description lists supported emoji and
+guides recovery after rejection. The agent can correct the call or explain the
+failure itself; delivery adds no canned reaction error response. Reactions
+create no synthetic delivered text messages in chat history.
 
 When `EXA_API_KEY` is configured, `AgentProvider` also registers the search and
 content-reading subset of AG2 `ExaToolkit`, assembled by `ai/tools/web.py`. The
@@ -124,9 +127,8 @@ It sends ordinary Telegram messages once per chunk. Domain messages carry no
 aiogram objects.
 `bot/chat_actions.py` scopes a best-effort typing task to each reply, cancels and
 joins it on exit, and logs failures without propagating notification errors into
-generation. `TelegramReactions` logs each confirmed delivery and its timing for
-both structured reaction replies and tool calls; rejected or unconfirmed attempts
-remain distinguishable.
+generation. `TelegramReactions` logs each confirmed tool delivery and its timing;
+rejected or unconfirmed attempts remain distinguishable.
 Its application-scoped `TelegramImages` dependency downloads authorized current
 and direct-reply images into bounded RAM, verifies supported signatures and
 returns domain `ImageAttachment` values. The Telegram provider supplies the

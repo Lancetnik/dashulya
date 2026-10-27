@@ -83,7 +83,7 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
         dialogue, _, _ = await self.dialogue(*turns)
         images = AsyncMock()
         images.load.return_value = ()
-        delivery = ReplyDelivery(self.bot, dialogue, images, TelegramReactions(self.bot))
+        delivery = ReplyDelivery(self.bot, dialogue, images)
         message = Message.model_validate({
             "message_id": 10,
             "date": SENT_AT,
@@ -113,11 +113,11 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
             if isinstance(call.args[1], (SendMessage, SendRichMessage))
         ]
 
-    async def test_final_reaction_targets_current_request_without_text(self) -> None:
+    async def test_tool_reacts_to_current_request_without_text(self) -> None:
         for chat_id in (-123, 42):
             with self.subTest(chat_id=chat_id):
                 self.requests.reset_mock()
-                await self.deliver(reply_json("", 999, reaction="❤️"), chat_id=chat_id)
+                await self.deliver(react(10, "❤️"), reply_json(""), chat_id=chat_id)
                 self.assertEqual(len(self.reactions()), 1)
                 reaction = self.reactions()[0]
                 self.assertEqual((reaction.chat_id, reaction.message_id), (chat_id, 10))
@@ -126,11 +126,9 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(reaction.reaction[0].emoji, "❤")
                 self.assertEqual(self.messages(), [])
 
-    async def test_confirmed_reactions_log_delivery_for_final_response_and_tool(
-        self,
-    ) -> None:
+    async def test_confirmed_reactions_log_delivery(self) -> None:
         for turns, target in (
-            ((reply_json("", reaction="❤️"),), 10),
+            ((react(10, "❤️"), reply_json("")), 10),
             ((react(1, "❤️"), reply_json("")), 1),
         ):
             with (
@@ -255,28 +253,29 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event["message"], "Reaction rejected")
         self.assertNotIn("Reaction delivered", str(logs.output))
 
-    async def test_text_takes_precedence_over_a_mixed_reaction_response(self) -> None:
-        await self.deliver(reply_json("A substantive answer", reaction="👍"))
+    async def test_text_response_does_not_set_a_reaction(self) -> None:
+        await self.deliver(reply_json("A substantive answer"))
         self.assertEqual(self.reactions(), [])
         self.assertEqual(len(self.messages()), 1)
 
-    async def test_explicit_rejection_gets_safe_text_fallback(self) -> None:
+    async def test_agent_can_explain_rejection_in_its_own_words(self) -> None:
         async def request(bot: Bot, method: Any, **kwargs: Any) -> bool:
             if isinstance(method, SetMessageReaction):
                 raise TelegramBadRequest(method, "PRIVATE TOKEN: REACTION_INVALID")
             return True
 
         self.requests.side_effect = request
+        explanation = "I can't use reactions in this chat, but thank you!"
         with self.assertLogs("dashulya.bot.reactions", level="WARNING") as logs:
-            await self.deliver(reply_json("", reaction="🙂"))
+            await self.deliver(react(10, "😁"), reply_json(explanation))
         self.assertEqual(len(self.reactions()), 1)
         self.assertEqual(len(self.messages()), 1)
         self.assertNotIn("PRIVATE TOKEN", str(logs.output) + str(self.messages()))
-        fallback = self.messages()[0]
-        assert isinstance(fallback, SendMessage)
-        self.assertIn("couldn't add", fallback.text)
+        response = self.messages()[0]
+        assert isinstance(response, SendMessage)
+        self.assertEqual(response.text, explanation)
 
-    async def test_final_reaction_network_failure_never_sends_another_response(
+    async def test_tool_reaction_network_failure_never_sends_a_canned_response(
         self,
     ) -> None:
         async def request(bot: Bot, method: Any, **kwargs: Any) -> bool:
@@ -286,7 +285,7 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
 
         self.requests.side_effect = request
         with self.assertLogs("dashulya.bot.reactions", level="WARNING"):
-            await self.deliver(reply_json("", reaction="👍"))
+            await self.deliver(react(10, "👍"), reply_json(""))
         self.assertEqual(len(self.reactions()), 1)
         self.assertEqual(self.messages(), [])
 
@@ -302,6 +301,48 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
         await self.deliver(react(1), reply_json("That was useful."))
         self.assertEqual(len(self.reactions()), 1)
         self.assertEqual(len(self.messages()), 1)
+
+    async def test_rejected_tool_can_be_corrected_without_a_canned_reply(self) -> None:
+        async def request(bot: Bot, method: Any, **kwargs: Any) -> bool:
+            if isinstance(method, SetMessageReaction):
+                assert method.reaction is not None
+                assert isinstance(method.reaction[0], ReactionTypeEmoji)
+                if method.reaction[0].emoji == "😅":
+                    raise TelegramBadRequest(method, "PRIVATE TOKEN: REACTION_INVALID")
+            return True
+
+        self.requests.side_effect = request
+        with self.assertLogs("dashulya.bot.reactions", level="WARNING"):
+            await self.deliver(react(10, "😅"), react(10, "😁"), reply_json(""))
+        self.assertEqual(len(self.reactions()), 2)
+        self.assertEqual(self.messages(), [])
+
+    async def test_rejected_tool_does_not_create_a_canned_reply_on_empty_output(
+        self,
+    ) -> None:
+        async def request(bot: Bot, method: Any, **kwargs: Any) -> bool:
+            if isinstance(method, SetMessageReaction):
+                raise TelegramBadRequest(method, "PRIVATE TOKEN: REACTION_INVALID")
+            return True
+
+        self.requests.side_effect = request
+        with self.assertLogs("dashulya.bot.reactions", level="WARNING"):
+            await self.deliver(react(10, "😅"), reply_json(""))
+        self.assertEqual(self.messages(), [])
+
+    async def test_tool_description_lists_supported_reactions_and_recovery(self) -> None:
+        dialogue, config, _ = await self.dialogue(react(1), reply_json(""))
+        await self.reply(dialogue)
+        schema = next(
+            item
+            for item in config.calls[0].tools
+            if isinstance(item, FunctionToolSchema)
+            and item.function.name == "set_reaction"
+        )
+        description = schema.function.description or ""
+        for emoji in ("😁", "❤", "👏", "🤝", "😡"):
+            self.assertIn(emoji, description)
+        self.assertIn("another allowed emoji", description)
 
     async def test_tool_schema_exposes_only_message_id_and_emoji(self) -> None:
         dialogue, config, _ = await self.dialogue(react(1), reply_json(""))
@@ -360,7 +401,7 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(part.data["reason"], "missing_chat_context")
         self.assertEqual(self.reactions(), [])
 
-    async def test_tool_failure_is_redacted_in_its_result_and_empty_output_is_not_success(
+    async def test_tool_failure_returns_redacted_error_without_a_canned_reply(
         self,
     ) -> None:
         method = SetMessageReaction(chat_id=-123, message_id=1)
@@ -372,7 +413,7 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
             self.assertLogs("dashulya.bot.reactions", level="WARNING") as logs,
         ):
             result = await self.reply(dialogue)
-        self.assertIn("couldn't generate", result.text)
+        self.assertEqual(result, Reply(""))
         stream = ask.call_args.kwargs["stream"]
         results = [
             event
@@ -386,7 +427,7 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(part.data["reason"], "telegram_rejected")
         self.assertNotIn("PRIVATE TOKEN", str(logs.output) + str(part.data))
 
-    async def test_unknown_tool_delivery_is_not_retried_by_either_mechanism(self) -> None:
+    async def test_unknown_tool_delivery_is_not_retried_with_another_emoji(self) -> None:
         method = SetMessageReaction(chat_id=-123, message_id=10)
 
         async def request(bot: Bot, call: Any, **kwargs: Any) -> bool:
@@ -396,7 +437,7 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
 
         self.requests.side_effect = request
         with self.assertLogs("dashulya.bot.reactions", level="WARNING"):
-            await self.deliver(react(10), react(10, "👍"), reply_json("", reaction="🔥"))
+            await self.deliver(react(10), react(10, "👍"), reply_json(""))
         self.assertEqual(len(self.reactions()), 1)
         self.assertEqual(self.messages(), [])
 
