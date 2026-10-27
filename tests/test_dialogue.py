@@ -1,4 +1,5 @@
 import asyncio
+import json
 import unittest
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, cast
@@ -107,6 +108,45 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         self.memory.search.assert_not_awaited()
         requests = await self.requests(self.last_stream())
         self.assertNotIn("Initial recall", requests[0])
+
+    async def test_group_citation_template_reaches_agent_without_a_history_tool_call(
+        self,
+    ) -> None:
+        self.history.context.return_value = ReplyContext((
+            MemoryMessage(
+                chat_id=-1002391257796,
+                message_id=19715,
+                text="Earlier statement",
+                sent_at=SENT_AT,
+                author_id=42,
+                author="Anna",
+                chat_title="Group",
+            ),
+        ))
+        await self.dialogue.reply(
+            (-1002391257796, None),
+            "Link?",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+            message_id=19735,
+            group_context={"message_id": 19735},
+        )
+        requests = await self.requests(self.last_stream())
+        line = next(
+            (line for line in requests[0].splitlines() if line.startswith("chat: ")), None
+        )
+        self.assertIsNotNone(
+            line, "The reply agent has IDs but no way to cite their Telegram messages"
+        )
+        assert line is not None
+        chat = json.loads(line.removeprefix("chat: "))
+        self.assertEqual(
+            chat["message_url_template"].format(message_id=19715),
+            "https://t.me/c/2391257796/19715",
+        )
+        self.assertTrue(any("Earlier statement" in request for request in requests))
+        self.memory.search.assert_not_awaited()
 
     async def test_each_message_keeps_its_send_time_in_ag2_history(self) -> None:
         first = datetime(2026, 10, 24, 20, 59, tzinfo=UTC)

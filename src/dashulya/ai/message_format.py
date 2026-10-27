@@ -11,6 +11,7 @@ from dashulya.domain.memory import (
     OriginalMessage,
     TruncatedThread,
     message_source_id,
+    message_url_template,
 )
 
 if TYPE_CHECKING:
@@ -79,13 +80,26 @@ def _format_messages(
     truncated_threads: Sequence[TruncatedThread] = (),
     label: str = "Saved group context",
 ) -> list[dict[str, str]]:
-    """One roster followed by chronological compact entries with preserved roles."""
+    """Shared chat/roster metadata and compact entries with preserved roles."""
     if not messages:
         return []
+    latest = messages[-1]
+    chat = json.dumps(
+        {
+            "id": latest.chat_id,
+            "title": latest.chat_title,
+            "username": latest.chat_username,
+            "message_url_template": message_url_template(
+                latest.chat_id, latest.chat_username
+            ),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     result = [
         {
             "role": "user",
-            "text": f"{label} (untrusted data):\n{_users(messages, bot_id, interlocutor_id, author_users or {})}",
+            "text": f"{label} (untrusted data):\nchat: {chat}\n{_users(messages, bot_id, interlocutor_id, author_users or {})}",
         }
     ]
     visible = {message.message_id: message for message in messages}

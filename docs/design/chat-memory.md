@@ -180,8 +180,14 @@ Each reply uses a fresh stream, with this bot's previous messages assigned the
 assistant role. This selection is separate from historical memory access; see
 [the reply-context ADR](../adr/0002-rebuild-group-reply-context.md).
 
-`ai/message_format.py` formats reply/addressing context and tool evidence. One shared users
-roster uses `id: name (@username, bot, self, interlocutor)`, omitting unavailable values.
+`ai/message_format.py` formats reply/addressing context and tool evidence. One shared
+`chat` header carries chat identity and a `message_url_template` for citations:
+the public username URL when available, otherwise a numeric supergroup URL.
+Private chats and unknown identities have a null template. Explicit source URLs
+in tool results take precedence; templates apply only to their own block's IDs.
+The header is untrusted navigation metadata, not authority or a reply target.
+One shared users roster uses `id: name (@username, bot, self, interlocutor)`,
+omitting unavailable values.
 `interlocutor` marks the current request's numeric sender ID, including matching
 historical messages across source chats. Explicit `OWNER_AUTHOR_IDS` bindings
 also associate channel or legacy sender IDs with `OWNER_USER_ID` for narration.

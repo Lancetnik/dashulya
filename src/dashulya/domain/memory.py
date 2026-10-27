@@ -11,6 +11,20 @@ def message_source_id(collection: str, message_id: int) -> str:
     return f"source:{key}:{message_id}"
 
 
+def message_url_template(chat_id: int | None, username: str | None) -> str | None:
+    """A shared citation address for originals from one known Telegram chat."""
+    if chat_id is None or chat_id > 0:
+        return None
+    if username:
+        return f"https://t.me/{username.lstrip('@')}/{{message_id}}"
+    numeric = str(chat_id)
+    return (
+        f"https://t.me/c/{numeric[4:]}/{{message_id}}"
+        if numeric.startswith("-100")
+        else None
+    )
+
+
 @dataclass(frozen=True)
 class MemoryMessage:
     chat_id: int

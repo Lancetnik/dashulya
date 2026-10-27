@@ -26,6 +26,64 @@ class GroupContextFormatTests(unittest.TestCase):
     def render(self, messages: list[MemoryMessage]) -> list[dict[str, str]]:
         return MessageFormatter(bot_id=123).context(messages)
 
+    def test_context_supplies_one_citation_template_for_public_and_private_supergroups(
+        self,
+    ) -> None:
+        for username, template in (
+            ("fastnewsdev_chat", "https://t.me/fastnewsdev_chat/{message_id}"),
+            (None, "https://t.me/c/2391257796/{message_id}"),
+        ):
+            messages = [
+                replace(
+                    self.message(number), chat_id=-1002391257796, chat_username=username
+                )
+                for number in (19715, 19716)
+            ]
+            with self.subTest(username=username):
+                rendered = self.render(messages)
+                line = next(
+                    (
+                        line
+                        for line in rendered[0]["text"].splitlines()
+                        if line.startswith("chat: ")
+                    ),
+                    None,
+                )
+                self.assertIsNotNone(
+                    line, "Immediate context lost the chat identity and citation URL"
+                )
+                assert line is not None
+                chat = json.loads(line.removeprefix("chat: "))
+                self.assertEqual(chat["id"], -1002391257796)
+                self.assertEqual(chat["message_url_template"], template)
+                self.assertEqual(
+                    "\n".join(item["text"] for item in rendered).count(template), 1
+                )
+                self.assertEqual(
+                    chat["message_url_template"].format(message_id=19715),
+                    template.replace("{message_id}", "19715"),
+                )
+
+    def test_nonlinkable_chats_do_not_receive_an_invented_message_link(self) -> None:
+        for chat_id, username in ((42, "alice"), (-123, None)):
+            with self.subTest(chat_id=chat_id):
+                rendered = self.render([
+                    replace(self.message(1), chat_id=chat_id, chat_username=username)
+                ])
+                line = next(
+                    (
+                        line
+                        for line in rendered[0]["text"].splitlines()
+                        if line.startswith("chat: ")
+                    ),
+                    None,
+                )
+                self.assertIsNotNone(line)
+                assert line is not None
+                self.assertIsNone(
+                    json.loads(line.removeprefix("chat: "))["message_url_template"]
+                )
+
     def test_interlocutor_is_marked_by_current_sender_id_instead_of_name(self) -> None:
         messages = [
             self.message(1),

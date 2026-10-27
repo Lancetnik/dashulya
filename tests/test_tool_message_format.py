@@ -204,6 +204,8 @@ class ToolMessageFormatTests(unittest.TestCase):
             chat_id=-100456,
             text="Foreign",
             chat_title="Other",
+            chat_username=None,
+            url=None,
         )
         private = original(collection="telegram:42", chat_id=42, text="Private", url=None)
         result = self.formatter.result({
@@ -211,11 +213,33 @@ class ToolMessageFormatTests(unittest.TestCase):
         })
         self.assertEqual(len(set(result["messages"])), 3)
         self.assertEqual(len(result["message_blocks"]), 3)
-        for block, body in zip(
-            result["message_blocks"], ["Original 1", "Foreign", "Private"], strict=True
+        for block, body, template in zip(
+            result["message_blocks"],
+            ["Original 1", "Foreign", "Private"],
+            ["https://t.me/group/{message_id}", "https://t.me/c/456/{message_id}", None],
+            strict=True,
         ):
             self.assertEqual(group_rows(block["text"])[0][3], body)
+            header = next(
+                line for line in block["text"].splitlines() if line.startswith("chat: ")
+            )
+            chat = json.loads(header.removeprefix("chat: "))
+            self.assertEqual(chat["id"], block["chat_id"])
+            self.assertEqual(chat["message_url_template"], template)
         self.assertNotIn("url", result["message_blocks"][2]["sources"][private.source_id])
+
+    def test_unbound_archive_preserves_explicit_source_url_without_inventing_a_template(
+        self,
+    ) -> None:
+        source = original(collection="archive:group", chat_id=None)
+        result = self.formatter.result({"messages": [source.render()]})
+        block = result["message_blocks"][0]
+        header = next(
+            line for line in block["text"].splitlines() if line.startswith("chat: ")
+        )
+        chat = json.loads(header.removeprefix("chat: "))
+        self.assertIsNone(chat["message_url_template"])
+        self.assertEqual(block["sources"][source.source_id]["url"], source.url)
 
     def test_excerpts_preserve_offsets_length_edits_topics_and_attachments(self) -> None:
         source = original(

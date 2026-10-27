@@ -12,6 +12,7 @@ from dashulya.domain.memory import (
     ReplyContext,
     TruncatedThread,
     message_source_id,
+    message_url_template,
 )
 from dashulya.domain.messages import ConversationKey
 
@@ -41,14 +42,8 @@ def original(row: dict[str, Any]) -> OriginalMessage:
 
 
 def message_url(chat_id: int, username: str | None, number: int) -> str | None:
-    if chat_id > 0:
-        return None
-    if username:
-        return f"https://t.me/{username}/{number}"
-    numeric = str(chat_id)
-    return (
-        f"https://t.me/c/{numeric[4:]}/{number}" if numeric.startswith("-100") else None
-    )
+    template = message_url_template(chat_id, username)
+    return template.replace("{message_id}", str(number)) if template else None
 
 
 class MessageStore:
