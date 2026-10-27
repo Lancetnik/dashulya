@@ -1,8 +1,7 @@
 import json
-import unittest
+from collections.abc import AsyncGenerator
 from contextlib import nullcontext
 from datetime import UTC, datetime
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,13 +10,14 @@ from ag2 import Agent
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.methods import SendMessage, SendRichMessage, TelegramMethod
-from aiogram.types import Message, Update, User
+from aiogram.types import File, Message, Update, User
 
 from dashulya.bot.formatting import text_chunks
-from dashulya.domain.messages import Reply
+from dashulya.domain.messages import ImageOmission, Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.storage.groups import GroupStore
+from tests.postgres import PostgresTestCase
 from tests.support import (
     TEST_API_KEY,
     BotOverride,
@@ -31,10 +31,21 @@ BOT_USER: dict[str, Any] = {"id": 123456789, "is_bot": True, "first_name": "Dash
 USER: dict[str, Any] = {"id": 42, "is_bot": False, "first_name": "Anna"}
 PRIVATE: dict[str, Any] = {"id": 42, "type": "private", "first_name": "Anna"}
 GROUP: dict[str, Any] = {"id": -123, "type": "supergroup", "title": "Test"}
+PHOTO = [{"file_id": "photo", "file_unique_id": "unique", "width": 2, "height": 2}]
+PNG = b"\x89PNG\r\n\x1a\nimage-data"
+ANIMATION: dict[str, Any] = {
+    "file_id": "animation",
+    "file_unique_id": "animation",
+    "width": 320,
+    "height": 240,
+    "duration": 3,
+    "thumbnail": {**PHOTO[0], "file_id": "thumbnail"},
+}
 
 
-class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
+class AIHandlerTests(PostgresTestCase):
     async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.bot = Bot(BOT_TOKEN)
@@ -62,7 +73,6 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
                 bot_token=BOT_TOKEN,
                 openai_api_key=TEST_API_KEY,
                 owner_user_id=USER["id"],
-                database_path=Path(self.directory.name) / "groups.sqlite3",
             ),
             BotOverride(self.bot),
             RecorderOverride(),
@@ -73,6 +83,23 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.groups = await self.container.get(GroupStore)
         self.dispatcher = await self.container.get(Dispatcher)
         self.update_id = 0
+        self.get_file = AsyncMock(
+            return_value=File(
+                file_id="photo", file_unique_id="unique", file_path="photos/image.png"
+            )
+        )
+
+        async def stream(*args: Any, **kwargs: Any) -> AsyncGenerator[bytes]:
+            yield PNG
+
+        self.download = MagicMock(side_effect=stream)
+        for target, name, replacement in (
+            (self.bot, "get_file", self.get_file),
+            (self.bot.session, "stream_content", self.download),
+        ):
+            patcher = patch.object(target, name, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     async def request(
         self, bot: Bot, method: TelegramMethod[Any], **kwargs: Any
@@ -136,6 +163,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
             user_id=42,
             user_name="Anna",
             sent_at=datetime.fromtimestamp(1700000000, UTC),
+            message_id=1,
             group_context=None,
         )
         self.decision_agent.ask.assert_not_awaited()
@@ -145,53 +173,56 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         assert reply.reply_parameters is not None
         self.assertEqual(reply.reply_parameters.message_id, 1)
 
-    async def test_markdown_bold_and_source_links_use_native_rich_messages(
+    async def test_markdown_bold_and_source_links_use_explicit_entities(
         self,
     ) -> None:
         link_label = "Обсуждение"
         self.dialogue.reply.return_value = Reply(
-            "Вчера обсуждали **Codex и Claude** 😄\n"
+            "Вчера обсуждали **Codex и Claude** 😄\n\n"
             f"[{link_label}](https://t.me/fastnewsdev_chat/19008)"
         )
         await self.message("Что обсуждали?")
-        reply = self.rich_replies()[-1]
-        self.assertEqual(
-            reply.rich_message.markdown, self.dialogue.reply.return_value.text
-        )
+        reply = self.replies()[-1]
+        self.assertEqual(reply.text, f"Вчера обсуждали Codex и Claude 😄\n\n{link_label}")
+        self.assertEqual([e.type for e in reply.entities or []], ["bold", "text_link"])
         self.assertEqual(reply.chat_id, PRIVATE["id"])
         assert reply.reply_parameters is not None
         self.assertEqual(reply.reply_parameters.message_id, 1)
-        self.assertEqual(self.replies(), [])
+        self.assertEqual(self.rich_replies(), [])
 
-    async def test_native_tables_and_collapsible_details_are_preserved(self) -> None:
-        text = "## Models\n\n| Model | Cost |\n| --- | --- |\n| Luna | Low |\n\n<details><summary>Details</summary>\n\n**More information**\n\n</details>"
+    async def test_tables_use_monospace_entities(self) -> None:
+        text = "## Models\n\n| Model | Cost |\n| --- | --- |\n| Luna | Low |\n\n**More information**"
         self.dialogue.reply.return_value = Reply(text)
         await self.message("Compare models")
-        self.assertEqual(len(self.rich_replies()), 1)
-        self.assertEqual(self.rich_replies()[0].rich_message.markdown, text)
+        self.assertEqual(self.rich_replies(), [])
+        reply = self.replies()[-1]
+        self.assertEqual([e.type for e in reply.entities or []], ["bold", "pre", "bold"])
+        self.assertIn("Model", reply.text)
+        self.assertIn("Luna", reply.text)
 
-    async def test_rejected_rich_message_falls_back_to_formatted_text(self) -> None:
+    async def test_rejected_entity_message_is_not_retried_as_plain_text(self) -> None:
         async def request(bot: Bot, method: TelegramMethod[Any], **kwargs: Any) -> bool:
-            if isinstance(method, SendRichMessage):
-                raise TelegramBadRequest(method, "Bad Request: can't parse rich message")
+            if isinstance(method, SendMessage):
+                raise TelegramBadRequest(method, "Bad Request: can't parse entities")
             return True
 
         self.requests.side_effect = request
         self.dialogue.reply.return_value = Reply(
             "**Codex** [source](https://example.com)"
         )
-        with self.assertLogs("dashulya.bot.replies", level="WARNING"):
+        with self.assertRaises(TelegramBadRequest):
             await self.message("Hi")
-        self.assertEqual(len(self.rich_replies()), 1)
+        self.assertEqual(self.rich_replies(), [])
+        self.assertEqual(len(self.replies()), 1)
         reply = self.replies()[-1]
         self.assertEqual(reply.text, "Codex source")
         self.assertEqual(
             [entity.type for entity in reply.entities or []], ["bold", "text_link"]
         )
 
-    async def test_rich_network_failure_is_not_retried_as_another_message(self) -> None:
+    async def test_entity_network_failure_is_not_retried_as_another_message(self) -> None:
         async def request(bot: Bot, method: TelegramMethod[Any], **kwargs: Any) -> bool:
-            if isinstance(method, SendRichMessage):
+            if isinstance(method, SendMessage):
                 raise TelegramNetworkError(method, "Connection lost after sending")
             return True
 
@@ -199,10 +230,10 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.dialogue.reply.return_value = Reply("**Codex**")
         with self.assertRaises(TelegramNetworkError):
             await self.message("Hi")
-        self.assertEqual(len(self.rich_replies()), 1)
-        self.assertEqual(self.replies(), [])
+        self.assertEqual(self.rich_replies(), [])
+        self.assertEqual(len(self.replies()), 1)
 
-    async def test_oversized_rich_answer_keeps_formatting_in_text_chunks(self) -> None:
+    async def test_long_answer_keeps_formatting_in_text_chunks(self) -> None:
         text = "a" * 33000
         self.dialogue.reply.return_value = Reply(f"**{text}**")
         await self.message("Long answer")
@@ -229,7 +260,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.dialogue.clear.assert_not_awaited()
         self.decision_agent.ask.assert_not_awaited()
         self.requests.assert_not_awaited()
-        self.assertEqual(self.groups.list_groups()[0].chat_id, GROUP["id"])
+        self.assertEqual((await self.groups.list_groups())[0].chat_id, GROUP["id"])
 
     async def test_forwarding_from_owner_does_not_grant_access(self) -> None:
         await self.message(
@@ -271,6 +302,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         for text in ("/start", "/help", "/groups", "/unknown", "/help@other_bot"):
             await self.message(text)
         await self.message(
+            chat=GROUP,
             sticker={
                 "file_id": "x",
                 "file_unique_id": "x",
@@ -279,7 +311,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
                 "height": 1,
                 "is_animated": False,
                 "is_video": False,
-            }
+            },
         )
         await self.message("Hi", sender=BOT_USER)
         await self.message("Group chatter", chat=GROUP)
@@ -290,7 +322,7 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.message("News", chat={"id": -789, "type": "channel", "title": "News"})
         self.dialogue.reply.assert_not_awaited()
-        self.assertEqual(self.groups.list_groups()[0].chat_id, -123)
+        self.assertEqual((await self.groups.list_groups())[0].chat_id, -123)
 
     async def test_group_mentions_and_topic_messages_bypass_decisions(self) -> None:
         text = "💋 @DASHULYA_BOT hello"
@@ -362,7 +394,8 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.dialogue.reply.await_count, 3)
         key = self.dialogue.recent_context.call_args.args[0]
         context = json.loads(self.decision_agent.ask.call_args.args[0])["current_message"]
-        self.assertEqual(key, (-123, 7))
+        self.assertEqual(key, (-123, None))
+        self.assertEqual(self.dialogue.reply.call_args.args[0], key)
         self.assertEqual(context["text"], "DASHULYA, help")
         self.assertEqual(context["sender_id"], 42)
 
@@ -516,3 +549,210 @@ class AIHandlerTests(unittest.IsolatedAsyncioTestCase):
         for chunk in chunks:
             self.assertLessEqual(len(chunk.encode("utf-16-le")) // 2, 4096)
         self.assertEqual(list(text_chunks("")), [])
+
+    async def test_private_photo_and_image_document_reach_dialogue_as_bytes(self) -> None:
+        for fields in (
+            {"photo": PHOTO},
+            {
+                "document": {
+                    "file_id": "document",
+                    "file_unique_id": "doc",
+                    "mime_type": "image/png",
+                },
+                "caption": "Read the text",
+            },
+        ):
+            await self.message(**fields)
+            image = self.dialogue.reply.call_args.kwargs["images"][0]
+            self.assertEqual(image.data, PNG)
+            self.assertEqual(image.media_type, "image/png")
+        self.assertEqual(self.dialogue.reply.await_count, 2)
+        self.assertEqual(self.dialogue.reply.call_args.args[1], "Read the text")
+        self.decision_agent.ask.assert_not_awaited()
+
+    async def test_caption_mentions_and_names_preserve_group_addressing(self) -> None:
+        await self.message(
+            chat=GROUP,
+            photo=PHOTO,
+            caption="@dashulya_bot inspect",
+            caption_entities=[{"type": "mention", "offset": 0, "length": 13}],
+        )
+        self.dialogue.reply.assert_awaited_once()
+        self.decision_agent.ask.assert_not_awaited()
+        self.decision_agent.ask.return_value.content.return_value = True
+        await self.message(chat=GROUP, photo=PHOTO, caption="Dashulya, inspect")
+        self.decision_agent.ask.assert_awaited_once()
+        self.assertEqual(self.dialogue.reply.await_count, 2)
+
+    async def test_outsider_and_rejected_group_photos_are_never_downloaded(self) -> None:
+        await self.message(photo=PHOTO, sender={**USER, "id": 43})
+        await self.message(chat=GROUP, photo=PHOTO, caption="Dashulya said this")
+        await self.message(chat=GROUP, photo=PHOTO)
+        self.get_file.assert_not_awaited()
+        self.download.assert_not_called()
+        self.dialogue.reply.assert_not_awaited()
+
+    async def test_text_request_can_inspect_its_reply_image(self) -> None:
+        await self.message(
+            "@dashulya_bot explain",
+            chat=GROUP,
+            entities=[{"type": "mention", "offset": 0, "length": 13}],
+            reply_to_message={
+                "message_id": 100,
+                "date": 1700000000,
+                "chat": GROUP,
+                "from": USER,
+                "photo": PHOTO,
+            },
+        )
+        images = self.dialogue.reply.call_args.kwargs["images"]
+        self.assertEqual(images[0].message_id, 100)
+        self.assertEqual(images[0].data, PNG)
+
+    async def test_oversized_image_reaches_agent_as_omission_without_download(
+        self,
+    ) -> None:
+        await self.message(photo=[{**PHOTO[0], "file_size": 20_000_001}])
+        self.get_file.assert_not_awaited()
+        self.download.assert_not_called()
+        self.dialogue.reply.assert_awaited_once()
+        self.assertEqual(
+            self.dialogue.reply.call_args.kwargs["images"], (ImageOmission(1),)
+        )
+
+    async def test_image_download_failure_does_not_expose_token(self) -> None:
+        self.get_file.side_effect = RuntimeError(self.bot.token)
+        with self.assertLogs("dashulya.bot.replies", level="WARNING") as logs:
+            await self.message(photo=PHOTO)
+        self.dialogue.reply.assert_not_awaited()
+        self.assertNotIn(self.bot.token, str(logs.output))
+        self.assertNotIn(self.bot.token, self.replies()[-1].text)
+
+    async def test_stickers_of_every_format_invoke_private_reply(self) -> None:
+        for format_flag in (None, "is_animated", "is_video"):
+            sticker = {
+                "file_id": "sticker",
+                "file_unique_id": "unique",
+                "type": "regular",
+                "width": 512,
+                "height": 512,
+                "is_animated": format_flag == "is_animated",
+                "is_video": format_flag == "is_video",
+                "thumbnail": {**PHOTO[0], "file_id": "thumbnail"},
+            }
+            await self.message(sticker=sticker)
+            images = self.dialogue.reply.call_args.kwargs["images"]
+            self.assertEqual(
+                images[0].preview_kind, "sticker" if format_flag is not None else None
+            )
+            self.assertEqual(
+                self.dialogue.reply.call_args.args[1],
+                "Please respond to this media in the context of our conversation.",
+            )
+        self.assertEqual(self.dialogue.reply.await_count, 3)
+
+    async def test_unaddressed_and_outsider_stickers_are_never_downloaded(self) -> None:
+        sticker = {
+            "file_id": "sticker",
+            "file_unique_id": "unique",
+            "type": "regular",
+            "width": 512,
+            "height": 512,
+            "is_animated": False,
+            "is_video": False,
+        }
+        await self.message(chat=GROUP, sticker=sticker)
+        await self.message(sticker=sticker, sender={**USER, "id": 43})
+        self.dialogue.reply.assert_not_awaited()
+        self.get_file.assert_not_awaited()
+        self.download.assert_not_called()
+
+    async def test_group_sticker_reply_to_bot_and_question_about_sticker(self) -> None:
+        sticker = {
+            "file_id": "sticker",
+            "file_unique_id": "unique",
+            "type": "regular",
+            "width": 512,
+            "height": 512,
+            "is_animated": True,
+            "is_video": False,
+            "thumbnail": {**PHOTO[0], "file_id": "thumbnail"},
+        }
+        await self.message(
+            chat=GROUP,
+            sticker=sticker,
+            reply_to_message={
+                "message_id": 100,
+                "date": 1700000000,
+                "chat": GROUP,
+                "from": BOT_USER,
+                "text": "Hello",
+            },
+        )
+        self.dialogue.reply.assert_awaited_once()
+        self.decision_agent.ask.assert_not_awaited()
+        await self.message(
+            "@dashulya_bot what does this mean?",
+            chat=GROUP,
+            entities=[{"type": "mention", "offset": 0, "length": 13}],
+            reply_to_message={
+                "message_id": 101,
+                "date": 1700000000,
+                "chat": GROUP,
+                "from": USER,
+                "sticker": sticker,
+            },
+        )
+        self.assertEqual(self.dialogue.reply.await_count, 2)
+        self.assertEqual(
+            self.dialogue.reply.call_args.kwargs["images"][0].message_id, 101
+        )
+        self.assertEqual(self.get_file.await_args_list[-1].args, ("thumbnail",))
+
+    async def test_private_and_caption_addressed_gif_use_animation_previews(self) -> None:
+        await self.message(animation=ANIMATION)
+        self.assertEqual(
+            self.dialogue.reply.call_args.kwargs["images"][0].preview_kind, "animation"
+        )
+        await self.message(
+            chat=GROUP,
+            animation=ANIMATION,
+            caption="@dashulya_bot explain",
+            caption_entities=[{"type": "mention", "offset": 0, "length": 13}],
+        )
+        self.assertEqual(self.dialogue.reply.await_count, 2)
+        self.decision_agent.ask.assert_not_awaited()
+        self.assertEqual(self.get_file.await_args_list[-1].args, ("thumbnail",))
+
+    async def test_unaddressed_and_outsider_gifs_never_download(self) -> None:
+        await self.message(animation=ANIMATION, sender={**USER, "id": 43})
+        await self.message(chat=GROUP, animation=ANIMATION)
+        self.get_file.assert_not_awaited()
+        self.download.assert_not_called()
+        self.dialogue.reply.assert_not_awaited()
+
+    async def test_question_replying_to_gif_and_decode_failure_preserve_dialogue(
+        self,
+    ) -> None:
+        await self.message(
+            "@dashulya_bot explain",
+            chat=GROUP,
+            entities=[{"type": "mention", "offset": 0, "length": 13}],
+            reply_to_message={
+                "message_id": 100,
+                "date": 1700000000,
+                "chat": GROUP,
+                "from": USER,
+                "animation": ANIMATION,
+            },
+        )
+        self.assertEqual(
+            self.dialogue.reply.call_args.kwargs["images"][0].message_id, 100
+        )
+        self.get_file.reset_mock()
+        await self.message(animation={**ANIMATION, "thumbnail": None})
+        self.get_file.assert_awaited_once_with("animation")
+        self.assertEqual(
+            self.dialogue.reply.call_args.kwargs["images"],
+            (ImageOmission(self.update_id, "decode_failed"),),
+        )

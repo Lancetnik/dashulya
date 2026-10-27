@@ -42,6 +42,20 @@ jobs:
     name: Tests (${{ matrix.python-version }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector@sha256:33198da2828a14c30348d2ccb4750833d5ed9a44c88d840a0e523d7417120337
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-only # pragma: allowlist secret -- Synthetic CI database.
+          POSTGRES_DB: dashulya_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dashulya_tests"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:test-only@localhost:5432/dashulya_tests # pragma: allowlist secret -- Synthetic CI database.
     strategy:
       fail-fast: false
       matrix:

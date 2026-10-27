@@ -8,6 +8,7 @@ from dishka.integrations.aiogram import FromDishka, inject
 
 from dashulya.ai.addressing import GroupAddressing
 from dashulya.ai.dialogue import Dialogue
+from dashulya.bot.messages import conversation_key
 from dashulya.bot.replies import ReplyDelivery
 from dashulya.domain.messages import GroupMessage
 from dashulya.observability import exception_fields
@@ -35,12 +36,12 @@ def group_message(message: Message, *, include_reply: bool = True) -> GroupMessa
         sender_is_bot=sender.is_bot if sender else False,
         mentioned_usernames=tuple(
             entity.extract_from(text).removeprefix("@")
-            for entity in message.entities or []
+            for entity in message.entities or message.caption_entities or []
             if entity.type == MessageEntityType.MENTION
         ),
         mentioned_user_ids=tuple(
             entity.user.id
-            for entity in message.entities or []
+            for entity in message.entities or message.caption_entities or []
             if entity.type == MessageEntityType.TEXT_MENTION and entity.user is not None
         ),
         reply_to=(
@@ -62,7 +63,7 @@ async def group_chat(
     failure_reason = "context_error"
     try:
         recent = await dialogue.recent_context(
-            (message.chat.id, message.message_thread_id),
+            conversation_key(message),
             through_message_id=message.message_id,
         )
         failure_reason = "classifier_error"
@@ -97,7 +98,7 @@ async def group_chat(
 
 @inject
 async def clear(message: Message, dialogue: FromDishka[Dialogue]) -> None:
-    await dialogue.clear((message.chat.id, message.message_thread_id))
+    await dialogue.clear(conversation_key(message))
     await message.answer("Conversation cleared. Let's start fresh 💋")
 
 
@@ -111,8 +112,9 @@ def create_router() -> Router:
     router.message.register(clear, Command("clear"), F.chat.type == ChatType.PRIVATE)
     router.message.register(
         chat,
-        F.text,
+        F.text | F.photo | F.document | F.sticker | F.animation,
         ~F.text.startswith("/"),
+        ~F.caption.startswith("/"),
         F.from_user,
         ~F.from_user.is_bot,
         F.chat.type == ChatType.PRIVATE,
@@ -120,8 +122,9 @@ def create_router() -> Router:
     router.message.register(
         group_chat,
         F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
-        F.text,
+        F.text | F.photo | F.document | F.sticker | F.animation,
         ~F.text.startswith("/"),
+        ~F.caption.startswith("/"),
         F.from_user,
         ~F.from_user.is_bot,
     )

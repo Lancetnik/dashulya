@@ -1,97 +1,225 @@
-import re
+"""Markdown to Telegram text/entities, adapted from slop-writer 0.5.1.
+
+Source: Lancetnik/slop-writer, commit e80d5b871cfa4816e9db999d55e30c812364cc6d,
+src/slop_writer/markdown.py. Apache-2.0; see slop-writer.LICENSE alongside this file.
+Adaptations use aiogram entities, enforce Bot API overlap rules and chunk replies.
+"""
+
 from collections.abc import Iterator
+from re import Match
+from typing import Any, cast
 
-from aiogram.types import InputRichMessage, MessageEntity
-from aiogram.utils.formatting import (
-    BlockQuote,
-    Bold,
-    Code,
-    Italic,
-    Pre,
-    Strikethrough,
-    Text,
-    TextLink,
-    sizeof,
+import mistune
+from aiogram.types import MessageEntity
+
+type Token = dict[str, Any]
+
+
+def _u16len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _parse_spoiler(
+    inline: mistune.InlineParser, match: Match[str], state: mistune.InlineState
+) -> int | None:
+    position = match.end()
+    end = state.src.find("||", position)
+    if end == -1:
+        return None
+    inner = state.copy()
+    inner.src = state.src[position:end]
+    state.append_token({"type": "spoiler", "children": inline.render(inner)})
+    return end + 2
+
+
+def _spoiler_plugin(md: mistune.Markdown) -> None:
+    md.inline.register("spoiler", r"\|\|(?=[^\s|])", _parse_spoiler, before="link")
+
+
+_MARKDOWN = mistune.create_markdown(
+    renderer=None,
+    plugins=["strikethrough", "insert", "table", "url", _spoiler_plugin],
 )
-from markdown_it import MarkdownIt
-from markdown_it.tree import SyntaxTreeNode
-
-_MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("strikethrough")
-_RICH_MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable([
-    "table",
-    "strikethrough",
-])
-_STYLES: dict[str, type[Text]] = {"strong": Bold, "em": Italic, "s": Strikethrough}
-_RICH_FORMATS = {
-    "strong",
-    "em",
-    "s",
-    "code_inline",
-    "fence",
-    "code_block",
-    "link",
-    "heading",
-    "bullet_list",
-    "ordered_list",
-    "blockquote",
-    "table",
-    "hr",
-}
-_RICH_BLOCKS = {
-    "paragraph",
-    "heading",
-    "fence",
-    "code_block",
-    "bullet_list",
-    "ordered_list",
-    "list_item",
-    "blockquote",
-    "table",
-    "tr",
-    "hr",
+_SPANS = {
+    "strong": "bold",
+    "emphasis": "italic",
+    "strikethrough": "strikethrough",
+    "insert": "underline",
+    "spoiler": "spoiler",
 }
 
 
-def rich_message(markdown: str) -> InputRichMessage | None:
-    # Native Rich Markdown supports 32768 characters, 500 blocks, and 16 levels.
-    if not markdown.strip() or len(markdown) > 32768:
-        return None
-    nodes = list(SyntaxTreeNode(_RICH_MARKDOWN.parse(markdown)).walk())
-    stack: list[str] = []
-    html_blocks = 0
-    formatted = any(node.type in _RICH_FORMATS for node in nodes)
-    for node in nodes:
-        if node.type == "image" or sum(1 for _ in _ancestors(node)) > 16:
-            return None
-        if node.type == "tr" and len(node.children) > 20:
-            return None
-        if node.type != "text":
-            continue
-        for tag in re.findall(r"<[^>\n]*>", node.content):
-            match = re.fullmatch(r"<(\/)?(details|summary|u|ins|sub|sup)( open)?>", tag)
-            if match is None:
-                return None
-            closing, name, attribute = match.groups()
-            if attribute and (closing or name != "details"):
-                return None
-            formatted = True
-            if closing:
-                if not stack or stack.pop() != name:
-                    return None
+class _Builder:
+    """Accumulate plain text and entity spans using a UTF-16 cursor."""
+
+    def __init__(self) -> None:
+        self.parts: list[str] = []
+        self.length = 0
+        self.entities: list[MessageEntity] = []
+
+    def text(self, text: str) -> None:
+        if text:
+            self.parts.append(text)
+            self.length += _u16len(text)
+
+    def span(
+        self,
+        kind: str,
+        start: int,
+        *,
+        url: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        if self.length > start:
+            self.entities.append(
+                MessageEntity(
+                    type=kind,
+                    offset=start,
+                    length=self.length - start,
+                    url=url,
+                    language=language,
+                )
+            )
+
+
+def _inline(builder: _Builder, tokens: list[Token], *, in_link: bool = False) -> None:
+    for token in tokens:
+        kind = token["type"]
+        if kind == "text":
+            builder.text(token["raw"])
+        elif kind in _SPANS:
+            start = builder.length
+            _inline(builder, token["children"], in_link=in_link)
+            builder.span(_SPANS[kind], start)
+        elif kind == "codespan":
+            start = builder.length
+            builder.text(token["raw"])
+            if not in_link:
+                builder.span("code", start)
+        elif kind == "link":
+            url = token["attrs"]["url"]
+            start = builder.length
+            _inline(
+                builder,
+                token.get("children") or [{"type": "text", "raw": url}],
+                in_link=True,
+            )
+            builder.span("text_link", start, url=url)
+        elif kind in {"softbreak", "linebreak"}:
+            builder.text("\n")
+        elif "children" in token:
+            _inline(builder, token["children"], in_link=in_link)
+        elif "raw" in token:
+            builder.text(token["raw"])
+
+
+def _cell_text(cell: Token) -> str:
+    builder = _Builder()
+    _inline(builder, cell.get("children", []))
+    return "".join(builder.parts).replace("\n", " ")
+
+
+def _render_table(builder: _Builder, token: Token) -> None:
+    head: list[str] = []
+    rows: list[list[str]] = []
+    for section in token["children"]:
+        if section["type"] == "table_head":
+            head = [_cell_text(cell) for cell in section["children"]]
+        elif section["type"] == "table_body":
+            rows = [
+                [_cell_text(cell) for cell in row["children"]]
+                for row in section["children"]
+            ]
+    columns = max([len(head), *(len(row) for row in rows)], default=0)
+    widths = [0] * columns
+    for cells in [head, *rows]:
+        for index in range(columns):
+            widths[index] = max(
+                widths[index], len(cells[index]) if index < len(cells) else 0
+            )
+
+    def formatted(cells: list[str]) -> str:
+        return " | ".join(
+            (cells[index] if index < len(cells) else "").ljust(widths[index])
+            for index in range(columns)
+        )
+
+    lines = [
+        formatted(head),
+        "-+-".join("-" * width for width in widths),
+        *(formatted(row) for row in rows),
+    ]
+    start = builder.length
+    builder.text("\n".join(lines))
+    builder.span("pre", start, language="")
+
+
+def _render_list(
+    builder: _Builder, token: Token, depth: int = 0, *, quoted: bool = False
+) -> None:
+    ordered = token["attrs"]["ordered"]
+    number = token["attrs"].get("start", 1) or 1
+    indent = "  " * depth
+    for index, item in enumerate(token["children"]):
+        if index:
+            builder.text("\n")
+        builder.text(f"{indent}{number}. " if ordered else f"{indent}• ")
+        number += 1
+        for child in item["children"]:
+            kind = child["type"]
+            if kind in {"block_text", "paragraph"}:
+                _inline(builder, child["children"])
+            elif kind == "list":
+                builder.text("\n")
+                _render_list(builder, child, depth + 1, quoted=quoted)
             else:
-                stack.append(name)
-                html_blocks += name in {"details", "summary"}
-                if len(stack) > 16:
-                    return None
-    if stack or not formatted:
-        return None
-    if sum(node.type in _RICH_BLOCKS for node in nodes) + html_blocks > 500:
-        return None
-    return InputRichMessage(markdown=markdown)
+                _block(builder, child, quoted=quoted)
+
+
+def _block(builder: _Builder, token: Token, *, quoted: bool = False) -> None:
+    kind = token["type"]
+    if kind in {"paragraph", "block_text"}:
+        _inline(builder, token["children"])
+    elif kind == "heading":
+        start = builder.length
+        _inline(builder, token["children"])
+        builder.span("bold", start)
+    elif kind == "block_code":
+        language = (token.get("attrs") or {}).get("info") or ""
+        language = language.split()[0] if language else ""
+        start = builder.length
+        builder.text(token["raw"].rstrip("\n"))
+        builder.span("pre", start, language=language)
+    elif kind == "block_quote":
+        start = builder.length
+        _blocks(builder, token["children"], quoted=True)
+        if not quoted:
+            builder.span("blockquote", start)
+    elif kind == "list":
+        _render_list(builder, token, quoted=quoted)
+    elif kind == "table":
+        _render_table(builder, token)
+    elif kind == "thematic_break":
+        builder.text("—")
+    elif "children" in token:
+        _inline(builder, token["children"])
+    elif "raw" in token:
+        builder.text(token["raw"])
+
+
+def _blocks(builder: _Builder, tokens: list[Token], *, quoted: bool = False) -> None:
+    first = True
+    for token in tokens:
+        if token["type"] == "blank_line":
+            continue
+        if not first:
+            builder.text("\n\n")
+        first = False
+        _block(builder, token, quoted=quoted)
 
 
 def text_chunks(text: str) -> Iterator[str]:
-    # Telegram measures offsets and lengths in UTF-16 units; keep emoji intact.
+    # Split before an astral character when its two UTF-16 units would overflow.
     chunk = ""
     units = 0
     for character in text:
@@ -103,62 +231,6 @@ def text_chunks(text: str) -> Iterator[str]:
         units += size
     if chunk:
         yield chunk
-
-
-def _ancestors(node: SyntaxTreeNode) -> Iterator[SyntaxTreeNode]:
-    parent = node.parent
-    while parent is not None:
-        yield parent
-        parent = parent.parent
-
-
-def _render(node: SyntaxTreeNode) -> Text:
-    if node.type in {"text", "html_inline", "html_block"}:
-        return Text(node.content)
-    if node.type in {"softbreak", "hardbreak"}:
-        return Text("\n")
-    if node.type == "code_inline":
-        # Telegram cannot combine a code entity with an inline link.
-        return (
-            Text(node.content)
-            if any(parent.type == "link" for parent in _ancestors(node))
-            else Code(node.content)
-        )
-    if node.type in {"fence", "code_block"}:
-        language = node.info.split()[0] if node.info.strip() else None
-        return Text(Pre(node.content.removesuffix("\n"), language=language), "\n\n")
-    if node.type in {"bullet_list", "ordered_list"}:
-        start = int(str(node.attrs.get("start", 1)))
-        depth = sum(
-            parent.type in {"bullet_list", "ordered_list"} for parent in _ancestors(node)
-        )
-        items = [
-            Text(
-                "  " * depth,
-                f"{index}. " if node.type == "ordered_list" else "• ",
-                _render(item),
-            )
-            for index, item in enumerate(node.children, start=start)
-        ]
-        return Text(*items, "\n")
-    body = [_render(child) for child in node.children]
-    if node.type in _STYLES:
-        return _STYLES[node.type](*body)
-    if node.type == "link":
-        return TextLink(*body, url=str(node.attrs["href"]))
-    if node.type == "heading":
-        return Text(Bold(*body), "\n\n")
-    if node.type == "paragraph":
-        return Text(*body, "\n" if node.hidden else "\n\n")
-    if node.type == "blockquote":
-        if any(parent.type == "blockquote" for parent in _ancestors(node)):
-            return Text(*body)
-        return BlockQuote(*body)
-    if node.type == "hr":
-        return Text("—\n\n")
-    if body:
-        return Text(*body)
-    return Text(node.content if node.token is not None else "")
 
 
 def _compatible_entities(
@@ -173,8 +245,7 @@ def _compatible_entities(
         if entity.type in {"code", "pre"}:
             yield entity
             continue
-        # Code/pre cannot overlap any other entity, even when Markdown nests them.
-        length = sizeof(entity.extract_from(text).rstrip())
+        length = _u16len(entity.extract_from(text).rstrip())
         ranges = [(entity.offset, entity.offset + length)]
         for code_start, code_end in code_ranges:
             remaining = []
@@ -193,19 +264,23 @@ def _compatible_entities(
 
 
 def render_markdown(markdown: str) -> Iterator[tuple[str, list[MessageEntity]]]:
-    document = SyntaxTreeNode(_MARKDOWN.parse(markdown))
-    text, raw_entities = _render(document).render()
-    text = text.rstrip("\n")
+    """Render once, then preserve UTF-16 entity spans across Telegram-sized chunks."""
+    builder = _Builder()
+    _blocks(builder, cast("list[Token]", _MARKDOWN(markdown)))
+    text = "".join(builder.parts).rstrip("\n")
     entities = sorted(
-        _compatible_entities(text, raw_entities), key=lambda entity: entity.offset
+        _compatible_entities(text, builder.entities),
+        key=lambda entity: (entity.offset, -entity.length),
     )
     offset = 0
     for chunk in text_chunks(text):
-        end = offset + sizeof(chunk)
+        end = offset + _u16len(chunk)
         chunk_entities = []
         for entity in entities:
-            start = max(offset, entity.offset)
-            stop = min(end, entity.offset + entity.length)
+            start, stop = (
+                max(offset, entity.offset),
+                min(end, entity.offset + entity.length),
+            )
             if stop > start:
                 chunk_entities.append(
                     entity.model_copy(

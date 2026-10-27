@@ -10,28 +10,47 @@ BOT_TOKEN = "123456789:TEST_ONLY_NOT_A_REAL_BOT_TOKEN"
 
 class SettingsTests(unittest.TestCase):
     @patch("dashulya.main.config.load_dotenv")
-    def test_openviking_settings_and_secret_redaction(
+    def test_explicit_owner_author_ids_do_not_change_access_identity(
         self, mock_load_dotenv: unittest.mock.MagicMock
     ) -> None:
         env = {
             "BOT_TOKEN": BOT_TOKEN,
-            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Fake credential.
+            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Synthetic key.
             "OWNER_USER_ID": "42",
+            "DATABASE_URL": "postgresql://localhost/dashulya",
         }
         with patch.dict(os.environ, env, clear=True):
-            self.assertEqual(
-                load_settings().memory_path,
-                Path("var/agent/evidence.sqlite3"),
-            )
-            os.environ.update({
-                "OPENVIKING_API_KEY": "test-secret",  # pragma: allowlist secret -- Fake credential.
-                "OPENVIKING_MANIFEST": "custom/manifest.json",
-            })
+            self.assertEqual(load_settings().owner_author_ids, ())
+            os.environ["OWNER_AUTHOR_IDS"] = " -100200, 200, -100200 "
             settings = load_settings()
-            self.assertEqual(settings.openviking_manifest, Path("custom/manifest.json"))
-            self.assertNotIn("test-secret", repr(settings))
-            os.environ["MEMORY_PATH"] = "custom/evidence.sqlite3"
-            self.assertEqual(load_settings().memory_path, Path("custom/evidence.sqlite3"))
+            self.assertEqual(settings.owner_author_ids, (-100200, 200))
+            self.assertEqual(settings.owner_user_id, 42)
+            for invalid in ("@channel", "0", "200,invalid", "1.5"):
+                os.environ["OWNER_AUTHOR_IDS"] = invalid
+                with (
+                    self.subTest(invalid=invalid),
+                    self.assertRaisesRegex(ValueError, "OWNER_AUTHOR_IDS"),
+                ):
+                    load_settings()
+
+    @patch("dashulya.main.config.load_dotenv")
+    def test_database_configuration_and_secret_redaction(
+        self, mock_load_dotenv: unittest.mock.MagicMock
+    ) -> None:
+        env = {
+            "BOT_TOKEN": BOT_TOKEN,
+            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Synthetic key.
+            "OWNER_USER_ID": "42",
+            "DATABASE_URL": "postgresql://test:test-only@localhost/dashulya",  # pragma: allowlist secret -- Synthetic database.
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings()
+            self.assertEqual(settings.database_url, env["DATABASE_URL"])
+            self.assertNotIn("test-only", repr(settings))
+            for invalid in ("", "sqlite:///old.db", "not-a-url", "postgresql://host"):
+                os.environ["DATABASE_URL"] = invalid
+                with self.assertRaisesRegex(ValueError, "DATABASE_URL"):
+                    load_settings()
 
     @patch("dashulya.main.config.load_dotenv")
     def test_missing_openai_key_has_actionable_error(
@@ -51,10 +70,11 @@ class SettingsTests(unittest.TestCase):
             "BOT_TOKEN": BOT_TOKEN,
             "OPENAI_API_KEY": " test-key ",
             "OWNER_USER_ID": "42",
+            "DATABASE_URL": "postgresql://localhost/dashulya",
         }
         with patch.dict(os.environ, env, clear=True):
             settings = load_settings()
-            self.assertEqual(settings.openai_model, "gpt-5.6-luna")
+            self.assertEqual(settings.openai_model, "gpt-6-luna")
             self.assertEqual(settings.openai_api_key, "test-key")
             self.assertEqual(settings.log_path, Path("var/logs/dashulya.log"))
             os.environ["LOG_PATH"] = "custom/bot.log"
@@ -62,7 +82,7 @@ class SettingsTests(unittest.TestCase):
             os.environ["OPENAI_MODEL"] = "custom-model"
             self.assertEqual(load_settings().openai_model, "custom-model")
             os.environ["OPENAI_MODEL"] = " "
-            self.assertEqual(load_settings().openai_model, "gpt-5.6-luna")
+            self.assertEqual(load_settings().openai_model, "gpt-6-luna")
             self.assertEqual(settings.openai_decision_model, "gpt-6-luna")
             os.environ["OPENAI_DECISION_MODEL"] = " decision-model "
             self.assertEqual(load_settings().openai_decision_model, "decision-model")
@@ -84,8 +104,9 @@ class SettingsTests(unittest.TestCase):
     ) -> None:
         env = {
             "BOT_TOKEN": BOT_TOKEN,
-            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Fake credential.  # pragma: allowlist secret -- Fake credential.
+            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Synthetic key.  # pragma: allowlist secret -- Fake credential.  # pragma: allowlist secret -- Fake credential.
             "OWNER_USER_ID": "42",
+            "DATABASE_URL": "postgresql://localhost/dashulya",
         }
         with patch.dict(os.environ, env, clear=True):
             self.assertEqual(load_settings().bot_timezone, "Europe/Moscow")
@@ -105,7 +126,7 @@ class SettingsTests(unittest.TestCase):
     ) -> None:
         env = {
             "BOT_TOKEN": BOT_TOKEN,
-            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Fake credential.  # pragma: allowlist secret -- Fake credential.
+            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Synthetic key.  # pragma: allowlist secret -- Fake credential.  # pragma: allowlist secret -- Fake credential.
         }
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(ValueError, "Set OWNER_USER_ID"):
@@ -115,5 +136,25 @@ class SettingsTests(unittest.TestCase):
                     os.environ["OWNER_USER_ID"] = value
                     with self.assertRaisesRegex(ValueError, "OWNER_USER_ID"):
                         load_settings()
+            os.environ["DATABASE_URL"] = "postgresql://localhost/dashulya"
             os.environ["OWNER_USER_ID"] = " 1234567890123 "
             self.assertEqual(load_settings().owner_user_id, 1234567890123)
+
+    @patch("dashulya.main.config.load_dotenv")
+    def test_exa_key_is_optional_trimmed_and_hidden(
+        self, mock_load_dotenv: unittest.mock.MagicMock
+    ) -> None:
+        env = {
+            "BOT_TOKEN": BOT_TOKEN,
+            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Synthetic key.
+            "OWNER_USER_ID": "42",
+            "DATABASE_URL": "postgresql://localhost/dashulya",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(load_settings().exa_api_key, "")
+            os.environ["EXA_API_KEY"] = " exa-test-only "
+            settings = load_settings()
+            self.assertEqual(settings.exa_api_key, "exa-test-only")
+            self.assertNotIn("exa-test-only", repr(settings))
+            os.environ["EXA_API_KEY"] = " "
+            self.assertEqual(load_settings().exa_api_key, "")

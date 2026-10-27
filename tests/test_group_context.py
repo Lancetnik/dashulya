@@ -1,5 +1,4 @@
 import asyncio
-import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,22 +10,26 @@ from ag2 import Agent, MemoryStream
 from ag2.events import ModelRequest, ModelResponse, TextInput
 from ag2.testing import TestConfig
 from aiogram import Bot, Dispatcher
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.methods import SendMessage, SendRichMessage, TelegramMethod
 from aiogram.types import Message, Update, User
 
 from dashulya.ai.agents.factory import create_reply_agent
 from dashulya.ai.dialogue import Dialogue
+from dashulya.bot.messages import conversation_key
+from dashulya.domain.memory import MemoryAccess, MemoryMessage
 from dashulya.domain.messages import Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
-from dashulya.memory.live import LiveMemory
+from dashulya.memory.store import MessageStore
+from tests.postgres import PostgresTestCase
 from tests.support import (
     TEST_API_KEY,
     BotOverride,
     MemoryOverride,
     ModelOverrides,
     RecorderOverride,
+    group_rows,
     reply_json,
 )
 
@@ -38,19 +41,21 @@ BOT: dict[str, Any] = {
     "username": "dashulya_bot",
 }
 OWNER = {"id": 42, "is_bot": False, "first_name": "Anna"}
-CHAT = {"id": -100123, "type": "supergroup", "title": "Group"}
+CHAT: dict[str, Any] = {"id": -100123, "type": "supergroup", "title": "Group"}
 
 
-class GroupContextTests(unittest.IsolatedAsyncioTestCase):
+class GroupContextTests(PostgresTestCase):
     async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        path = Path(directory.name)
-        self.store = LiveMemory(path / "live.sqlite3")
+        Path(directory.name)
+        self.store = MessageStore(self.database)
         await self.store.initialize()
         self.bot = Bot("123:TEST")
         self.addAsyncCleanup(self.bot.session.close)
         self.next_id = 0
+        self.chats: dict[int, dict[str, Any]] = {CHAT["id"]: CHAT}
         self.sent: list[Message] = []
         self.requests = AsyncMock(side_effect=self.request)
         for target, name, replacement in (
@@ -65,7 +70,6 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
                 bot_token=self.bot.token,
                 openai_api_key=TEST_API_KEY,
                 owner_user_id=42,
-                database_path=path / "groups.sqlite3",
             ),
             BotOverride(self.bot),
             RecorderOverride(self.store),
@@ -92,7 +96,9 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
         result = Message.model_validate({
             "message_id": self.next_id,
             "date": int(NOW.timestamp()),
-            "chat": CHAT,
+            "chat": self.chats.get(method.chat_id, CHAT)
+            if isinstance(method.chat_id, int)
+            else CHAT,
             "from": BOT,
             "text": text,
         })
@@ -112,6 +118,7 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
             **fields,
         }
         message = Message.model_validate(payload)
+        self.chats[message.chat.id] = message.chat.model_dump(exclude_none=True)
         await self.dispatcher.feed_update(
             self.bot,
             Update.model_validate({"update_id": self.next_id, "message": payload}),
@@ -122,6 +129,119 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
         stream = self.ask.call_args.kwargs["stream"]
         assert isinstance(stream, MemoryStream)
         return stream
+
+    async def test_ordinary_group_reply_thread_keeps_twenty_chat_messages_and_parents(
+        self,
+    ) -> None:
+        # Existing rows retain raw thread IDs from the former capture implementation.
+        for number in range(1, 27):
+            await self.store.record(
+                MemoryMessage(
+                    CHAT["id"],
+                    number,
+                    f"Original {number}",
+                    NOW,
+                    99,
+                    "Boris",
+                    "Group",
+                    thread_id=20 if number >= 21 else None,
+                    reply_to_id=1 if number == 26 else None,
+                )
+            )
+        for chat, number, text in [
+            (CHAT["id"], 99, "Future secret"),
+            (-100456, 25, "Foreign secret"),
+        ]:
+            await self.store.record(
+                MemoryMessage(chat, number, text, NOW, 99, "Boris", "Other")
+            )
+        self.next_id = 26
+        trigger = await self.feed(
+            "Dashulya",
+            message_thread_id=20,
+            is_topic_message=False,
+            reply_to_message={
+                "message_id": 26,
+                "date": int(NOW.timestamp()),
+                "chat": CHAT,
+                "from": OWNER,
+                "text": "Original 26",
+                "message_thread_id": 20,
+            },
+            entities=[{"type": "text_mention", "offset": 0, "length": 8, "user": BOT}],
+        )
+        events = await self.stream().history.get_events()
+        inputs = [
+            part.content
+            for event in events
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+            if isinstance(part, TextInput)
+        ]
+        rendered = "\n".join(inputs)
+        self.assertEqual(
+            [row[0] for row in group_rows(rendered)],
+            [1, *range(8, 28)],
+        )
+        self.assertNotIn("Future secret", rendered)
+        self.assertNotIn("Foreign secret", rendered)
+        rows = await self.store.originals(MemoryAccess(CHAT["id"], False))
+        self.assertIsNone(
+            next(row for row in rows if row.message_id == trigger.message_id).topic_id
+        )
+
+    async def test_name_addressing_reads_the_same_whole_group_context(self) -> None:
+        await self.feed("Earlier independent message", owner=False)
+        await self.feed(
+            "Earlier reply branch",
+            owner=False,
+            message_thread_id=1,
+            is_topic_message=False,
+        )
+        dialogue = await self.container.get(Dialogue)
+        with patch.object(
+            dialogue, "recent_context", wraps=dialogue.recent_context
+        ) as recent:
+            await self.feed(
+                "Dashulya, what do you think?",
+                message_thread_id=1,
+                is_topic_message=False,
+            )
+        self.assertEqual(recent.call_args.args[0], (CHAT["id"], None))
+        context = await dialogue.recent_context((CHAT["id"], None), through_message_id=3)
+        self.assertEqual(len(context), 3)
+        self.assertIn("Earlier independent message", context[1]["text"])
+        self.assertIn("Earlier reply branch", context[2]["text"])
+        self.ask.assert_not_awaited()
+
+    async def test_forum_general_topic_does_not_read_other_topics(self) -> None:
+        forum = {**CHAT, "is_forum": True}
+        await self.feed(
+            "Other topic secret", owner=False, chat=forum, message_thread_id=7
+        )
+        await self.feed("General discussion", owner=False, chat=forum)
+        trigger = await self.feed(
+            "Dashulya",
+            chat=forum,
+            entities=[{"type": "text_mention", "offset": 0, "length": 8, "user": BOT}],
+        )
+        self.assertEqual(conversation_key(trigger), (CHAT["id"], 1))
+        events = await self.stream().history.get_events()
+        rendered = "\n".join(
+            part.content
+            for event in events
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+            if isinstance(part, TextInput)
+        )
+        self.assertIn("General discussion", rendered)
+        self.assertNotIn("Other topic secret", rendered)
+        saved = (
+            await self.store.context(
+                (CHAT["id"], 1), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
+        self.assertEqual(saved[-1].message_id, self.sent[-1].message_id)
 
     async def test_passive_messages_and_delivered_bot_reply_reach_next_fresh_turn(
         self,
@@ -157,27 +277,27 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
             for part in event.parts
             if isinstance(part, TextInput)
         ]
-        self.assertIn("We were discussing cats", requests[0])
-        self.assertIn("Boris (Telegram user ID: 99)", requests[0])
-        self.assertIn("Reply to message ID: 3", requests[-1])
+        self.assertIn("We were discussing cats", "\n".join(requests))
+        self.assertIn("99: Boris", requests[0])
+        self.assertEqual(group_rows(requests[-1])[-1][4], 3)
         earlier_bot = [
             event
             for event in events
             if isinstance(event, ModelResponse)
-            and "Telegram message ID: 3" in (event.content or "")
+            and any(row[0] == 3 for row in group_rows(event.content or ""))
         ]
         self.assertEqual(len(earlier_bot), 1)
         self.assertEqual(earlier_bot[0].to_api()["role"], "assistant")
-        saved = await self.store.context(
-            (-100123, 7), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context((-100123, 7), self.next_id, limit=20, parent_hops=5)
+        ).messages
         self.assertEqual([m.message_id for m in saved], [1, 2, 3, 4, 5])
         self.assertEqual(saved[2].reply_to_id, first.message_id)
         self.assertEqual(saved[-1].reply_to_id, second.message_id)
         self.assertEqual(saved[2].author_id, BOT["id"])
         self.assertEqual((await self.store.coverage())["indexed_count"], 0)
 
-    async def test_rich_reply_records_markdown_with_actual_id(self) -> None:
+    async def test_formatted_reply_records_delivered_text_with_actual_id(self) -> None:
         self.ask.return_value = SimpleNamespace(
             content=AsyncMock(return_value=Reply("**Hello**"))
         )
@@ -192,11 +312,22 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
                 "text": "Previous answer",
             },
         )
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual(saved[-1].message_id, self.sent[-1].message_id)
-        self.assertEqual(saved[-1].text, "**Hello**")
+        self.assertEqual(saved[-1].text, "Hello")
+        delivered = [
+            call.args[1]
+            for call in self.requests.call_args_list
+            if isinstance(call.args[1], SendMessage)
+        ]
+        self.assertEqual(delivered[-1].text, saved[-1].text)
+        self.assertEqual(
+            [entity.type for entity in delivered[-1].entities or []], ["bold"]
+        )
         self.assertEqual(saved[-1].reply_to_id, 1)
 
     async def test_ambiguous_send_failure_does_not_record_or_retry(self) -> None:
@@ -218,9 +349,11 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
                     }
                 ],
             )
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual([m.author_id for m in saved], [42])
         sends = [
             call
@@ -229,35 +362,28 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(len(sends), 1)
 
-    async def test_rejected_rich_reply_records_only_successful_text_chunks(self) -> None:
+    async def test_entity_reply_records_only_the_delivered_message(self) -> None:
         self.ask.return_value = SimpleNamespace(
             content=AsyncMock(return_value=Reply("**Hello**"))
         )
         self.ask.side_effect = None
 
-        async def reject_rich(
-            bot: Bot, method: TelegramMethod[Any], **kwargs: Any
-        ) -> Message | bool:
-            if isinstance(method, SendRichMessage):
-                raise TelegramBadRequest(method, "Rich message rejected")
-            return await self.request(bot, method, **kwargs)
-
-        self.requests.side_effect = reject_rich
-        with self.assertLogs("dashulya.bot.replies", level="WARNING"):
-            await self.feed(
-                "Dashulya",
-                entities=[
-                    {
-                        "type": "text_mention",
-                        "offset": 0,
-                        "length": 8,
-                        "user": BOT,
-                    }
-                ],
-            )
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
+        await self.feed(
+            "Dashulya",
+            entities=[
+                {
+                    "type": "text_mention",
+                    "offset": 0,
+                    "length": 8,
+                    "user": BOT,
+                }
+            ],
         )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual(
             [(m.author_id, m.text) for m in saved], [(42, "Dashulya"), (123, "Hello")]
         )
@@ -292,9 +418,11 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
                     }
                 ],
             )
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual(len(saved), 2)
         self.assertEqual(saved[-1].text, self.sent[-1].text)
         self.assertTrue(0 < len(saved[-1].text) <= 4096)
@@ -312,9 +440,11 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         )
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual([m.author_id for m in saved], [42, 123])
         self.assertIn("Here's what I can do", saved[-1].text)
         self.ask.assert_not_awaited()
@@ -366,51 +496,44 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
         for send in sends:
             assert send.reply_parameters is not None
             self.assertEqual(send.reply_parameters.message_id, 1)
-        saved = await self.store.context(
-            (-100123, 7), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context((-100123, 7), self.next_id, limit=20, parent_hops=5)
+        ).messages
         self.assertEqual("".join(m.text for m in saved if m.author_id == 123), text)
         self.assertTrue(all(m.reply_to_id == 1 for m in saved if m.author_id == 123))
 
-    async def test_selected_reply_target_survives_rich_rejection(self) -> None:
+    async def test_selected_reply_target_is_preserved_in_entity_delivery(self) -> None:
         await self.feed("The message to answer", owner=False)
         self.ask.return_value = SimpleNamespace(
             content=AsyncMock(return_value=Reply("**Answer**", 1))
         )
         self.ask.side_effect = None
 
-        async def reject_rich(
-            bot: Bot, method: TelegramMethod[Any], **kwargs: Any
-        ) -> Message | bool:
-            if isinstance(method, SendRichMessage):
-                raise TelegramBadRequest(method, "Rich message rejected")
-            return await self.request(bot, method, **kwargs)
-
-        self.requests.side_effect = reject_rich
-        with self.assertLogs("dashulya.bot.replies", level="WARNING"):
-            await self.feed(
-                "Dashulya",
-                entities=[
-                    {
-                        "type": "text_mention",
-                        "offset": 0,
-                        "length": 8,
-                        "user": BOT,
-                    }
-                ],
-            )
+        await self.feed(
+            "Dashulya",
+            entities=[
+                {
+                    "type": "text_mention",
+                    "offset": 0,
+                    "length": 8,
+                    "user": BOT,
+                }
+            ],
+        )
         sends = [
             call.args[1]
             for call in self.requests.call_args_list
             if isinstance(call.args[1], (SendMessage, SendRichMessage))
         ]
-        self.assertEqual(len(sends), 2)
+        self.assertEqual(len(sends), 1)
         for send in sends:
             assert send.reply_parameters is not None
             self.assertEqual(send.reply_parameters.message_id, 1)
-        saved = await self.store.context(
-            (-100123, None), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context(
+                (-100123, None), self.next_id, limit=20, parent_hops=5
+            )
+        ).messages
         self.assertEqual(saved[-1].text, "Answer")
         self.assertEqual(saved[-1].reply_to_id, 1)
 
@@ -441,9 +564,9 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
         ]
         assert sends[-1].reply_parameters is not None
         self.assertEqual(sends[-1].reply_parameters.message_id, trigger.message_id)
-        saved = await self.store.context(
-            (-100123, 7), self.next_id, limit=20, parent_hops=5
-        )
+        saved = (
+            await self.store.context((-100123, 7), self.next_id, limit=20, parent_hops=5)
+        ).messages
         self.assertEqual(saved[-1].reply_to_id, trigger.message_id)
 
     async def test_invalid_structured_output_uses_redacted_fallback(self) -> None:

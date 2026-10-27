@@ -6,16 +6,27 @@ from unittest.mock import AsyncMock, patch
 
 from ag2 import Agent, MemoryStream, ResponseSchema
 from ag2.agent import AgentReply
-from ag2.events import ModelRequest, ModelResponse, TextInput
+from ag2.events import BinaryInput, ModelRequest, ModelResponse, TextInput
 from ag2.testing import TestConfig, TrackingConfig
 
 from dashulya.ai.agents.factory import create_reply_agent
 from dashulya.ai.dialogue import Dialogue
-from dashulya.domain.memory import ChatHistory, MemoryMessage
-from dashulya.domain.messages import ConversationKey, Reply
+from dashulya.domain.memory import ChatHistory, MemoryBackend, MemoryMessage, ReplyContext
+from dashulya.domain.messages import (
+    ConversationKey,
+    ImageAttachment,
+    ImageOmission,
+    Reply,
+)
 from dashulya.main import create_container
 from dashulya.main.config import Settings
-from tests.support import TEST_API_KEY, MemoryOverride, ModelOverrides, reply_json
+from tests.support import (
+    TEST_API_KEY,
+    MemoryOverride,
+    ModelOverrides,
+    group_rows,
+    reply_json,
+)
 
 SENT_AT = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 
@@ -29,10 +40,12 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             owner_user_id=42,
         )
         self.history = AsyncMock(spec=ChatHistory)
-        self.history.context.return_value = []
+        self.memory = AsyncMock(spec=MemoryBackend)
+        self.memory.search.return_value = {"coverage": {}, "hits": []}
+        self.history.context.return_value = ReplyContext()
         self.container = create_container(
             self.settings,
-            MemoryOverride(history=self.history),
+            MemoryOverride(self.memory, history=self.history),
             ModelOverrides(reply=self.config, decision=TestConfig("false")),
         )
         self.addAsyncCleanup(self.container.close)
@@ -82,12 +95,18 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 2)
         self.assertIn("Remember Anna", requests[0])
         self.assertIn("Who am I?", requests[1])
-        self.assertIn("Anna (Telegram user ID: 42)", requests[0])
+        self.assertIn("Anna (Telegram user ID: 42; interlocutor)", requests[0])
         self.assertEqual(self.config.calls[-1].variables, {"user_id": 42, "chat_id": 42})
         responses = [
             e for e in await stream.history.get_events() if isinstance(e, ModelResponse)
         ]
         self.assertEqual([e.content for e in responses], [reply_json("AI answer")] * 2)
+
+    async def test_casual_reply_does_not_search_memory_automatically(self) -> None:
+        await self.reply((42, None), "Hello")
+        self.memory.search.assert_not_awaited()
+        requests = await self.requests(self.last_stream())
+        self.assertNotIn("Initial recall", requests[0])
 
     async def test_each_message_keeps_its_send_time_in_ag2_history(self) -> None:
         first = datetime(2026, 10, 24, 20, 59, tzinfo=UTC)
@@ -98,8 +117,8 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             requests,
             [
-                "Sent at: 24 October 2026 (Saturday) 23:59:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42):\nYesterday",
-                "Sent at: 25 October 2026 (Sunday) 03:05:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42):\nToday",
+                "Sent at: 24 October 2026 (Saturday) 23:59:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42; interlocutor):\nYesterday",
+                "Sent at: 25 October 2026 (Sunday) 03:05:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42; interlocutor):\nToday",
             ],
         )
 
@@ -184,7 +203,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await self.requests(fresh),
             [
-                "Sent at: 25 October 2026 (Sunday) 15:00:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42):\nFresh"
+                "Sent at: 25 October 2026 (Sunday) 15:00:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42; interlocutor):\nFresh"
             ],
         )
 
@@ -259,7 +278,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             await reading
 
     async def test_group_reply_preserves_send_time_and_quotes_reply_target(self) -> None:
-        self.history.context.return_value = [
+        self.history.context.return_value = ReplyContext((
             MemoryMessage(
                 chat_id=-123,
                 message_id=1,
@@ -269,8 +288,8 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
                 author="Dashulya",
                 chat_title="Group",
                 thread_id=7,
-            )
-        ]
+            ),
+        ))
         context: dict[str, object] = {
             "message_id": 2,
             "text": "What do you mean?",
@@ -286,12 +305,13 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         )
         stream = self.last_stream()
         request = (await self.requests(stream))[-1]
-        self.assertIn("25 October 2026 (Sunday) 15:00:00", request)
-        self.assertIn("Reply to message ID: 1", request)
+        self.assertIn("25 October 2026 (Sunday)", "\n".join(await self.requests(stream)))
+        self.assertEqual(group_rows(request)[-1][2], "15:00:00")
+        self.assertEqual(group_rows(request)[-1][4], 1)
         events = list(await stream.history.get_events())
-        assert isinstance(events[0], ModelResponse)
-        self.assertEqual(events[0].to_api()["role"], "assistant")
-        self.assertIn("Earlier message", events[0].content or "")
+        assert isinstance(events[1], ModelResponse)
+        self.assertEqual(events[1].to_api()["role"], "assistant")
+        self.assertIn("Earlier message", events[1].content or "")
         self.history.context.assert_awaited_once_with(
             (-123, 7), 2, limit=20, parent_hops=5
         )
@@ -299,7 +319,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
     async def test_group_turns_rebuild_history_and_keep_actual_bot_role(self) -> None:
         streams = []
         for number in (10, 11):
-            self.history.context.return_value = [
+            self.history.context.return_value = ReplyContext((
                 MemoryMessage(
                     chat_id=-123,
                     message_id=1,
@@ -338,7 +358,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
                     author="Anna",
                     chat_title="Group",
                 ),
-            ]
+            ))
             await self.dialogue.reply(
                 (-123, None),
                 f"Request {number}",
@@ -350,14 +370,15 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             stream = self.last_stream()
             streams.append(stream)
             events = list(await stream.history.get_events())
-            self.assertIsInstance(events[0], ModelResponse)
-            self.assertIsInstance(events[1], ModelRequest)
+            self.assertIsInstance(events[0], ModelRequest)
+            self.assertIsInstance(events[1], ModelResponse)
             self.assertIsInstance(events[2], ModelRequest)
+            self.assertIsInstance(events[3], ModelRequest)
             requests = await self.requests(stream)
-            self.assertIn("Passive participant", requests[0])
-            self.assertIn("Reply to message ID: 1", requests[0])
-            self.assertIn("Attachment: animation; contents unavailable", requests[1])
-            self.assertEqual(len(requests), 3)
+            self.assertIn("Passive participant", requests[1])
+            self.assertEqual(group_rows(requests[1])[0][4], 1)
+            self.assertEqual(group_rows(requests[2])[0][5], "animation")
+            self.assertEqual(len(requests), 4)
             self.assertEqual(requests[-1].count(f"Request {number}"), 1)
             if number == 11:
                 self.assertIsNot(stream, streams[0])
@@ -367,7 +388,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
     async def test_group_classifier_uses_observed_history_instead_of_ai_turns(
         self,
     ) -> None:
-        self.history.context.return_value = [
+        self.history.context.return_value = ReplyContext((
             MemoryMessage(
                 chat_id=-123,
                 message_id=1,
@@ -386,15 +407,15 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
                 author="Anna",
                 chat_title="Group",
             ),
-        ]
+        ))
         recent = await self.dialogue.recent_context((-123, None), through_message_id=2)
-        self.assertEqual(len(recent), 1)
-        self.assertEqual(recent[0]["role"], "assistant")
-        self.assertIn("Earlier delivered answer", recent[0]["text"])
+        self.assertEqual(len(recent), 2)
+        self.assertEqual(recent[1]["role"], "assistant")
+        self.assertIn("Earlier delivered answer", recent[1]["text"])
         self.assertNotIn("Current request", recent[0]["text"])
 
     async def test_reply_target_must_be_in_the_selected_group_context(self) -> None:
-        self.history.context.return_value = [
+        self.history.context.return_value = ReplyContext((
             MemoryMessage(
                 chat_id=-123,
                 message_id=1,
@@ -405,7 +426,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
                 chat_title="Group",
                 reply_to_id=999,
             ),
-        ]
+        ))
         for target, expected in (
             (None, None),
             (1, 1),
@@ -454,3 +475,178 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             sent_at=SENT_AT,
         )
         self.assertEqual(result, Reply("Private answer"))
+
+    async def test_private_images_survive_followup_and_oldest_are_evicted_at_budget(
+        self,
+    ) -> None:
+        dialogue = Dialogue(self.agent, max_image_bytes=5)
+        for message_id, data in ((1, b"123"), (2, b"45"), (3, b"678")):
+            await dialogue.reply(
+                (42, None),
+                "Inspect",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                images=(ImageAttachment(data, "image/png", message_id),),
+            )
+        await dialogue.reply(
+            (42, None), "Compare", user_id=42, user_name="Anna", sent_at=SENT_AT
+        )
+        events = list(await self.last_stream().history.get_events())
+        binary = [
+            part
+            for event in events
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+            if isinstance(part, BinaryInput)
+        ]
+        self.assertEqual([part.data for part in binary], [b"45", b"678"])
+        self.assertEqual(
+            [part.vendor_metadata["detail"] for part in binary], ["high", "high"]
+        )
+        self.assertIn(
+            "Earlier image omitted", "\n".join(await self.requests(self.last_stream()))
+        )
+        await dialogue.clear((42, None))
+        self.assertEqual(await dialogue.recent_context((42, None)), [])
+
+    async def test_group_images_are_limited_to_selected_message_ids(self) -> None:
+        self.history.context.return_value = ReplyContext((
+            MemoryMessage(
+                chat_id=-123,
+                message_id=1,
+                text="Photo caption",
+                sent_at=SENT_AT,
+                author_id=99,
+                author="Boris",
+                chat_title="Group",
+                media_type="photo",
+            ),
+        ))
+        await self.dialogue.reply(
+            (-123, None),
+            "Inspect",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+            group_context={"message_id": 2},
+            images=(
+                ImageAttachment(b"selected", "image/png", 1),
+                ImageAttachment(b"excluded", "image/png", 999),
+            ),
+        )
+        parts = [
+            part
+            for event in await self.last_stream().history.get_events()
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+        ]
+        self.assertEqual(
+            [part.data for part in parts if isinstance(part, BinaryInput)], [b"selected"]
+        )
+        self.assertIn(
+            "Attached image from Telegram message ID: 1",
+            "\n".join(await self.requests(self.last_stream())),
+        )
+
+    async def test_oversized_direct_image_input_never_invokes_model(self) -> None:
+        dialogue = Dialogue(self.agent, max_image_bytes=1)
+        with self.assertRaisesRegex(ValueError, "byte budget"):
+            await dialogue.reply(
+                (42, None),
+                "Inspect",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                images=(ImageAttachment(b"12", "image/png", 1),),
+            )
+        self.ask.assert_not_awaited()
+
+    async def test_omitted_image_is_an_explicit_model_note_with_no_binary_input(
+        self,
+    ) -> None:
+        await self.dialogue.reply(
+            (42, None),
+            "Read this",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+            images=(ImageOmission(1),),
+        )
+        text = "\n".join(await self.requests(self.last_stream()))
+        self.assertIn("Telegram message ID: 1 omitted", text)
+        self.assertIn("too large for the 20 MB", text)
+        self.assertFalse(
+            any(
+                isinstance(part, BinaryInput)
+                for event in await self.last_stream().history.get_events()
+                if isinstance(event, ModelRequest)
+                for part in event.parts
+            )
+        )
+
+    async def test_sticker_preview_and_missing_thumbnail_are_explicit_model_inputs(
+        self,
+    ) -> None:
+        await self.dialogue.reply(
+            (42, None),
+            "What is this sticker?",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+            images=(
+                ImageAttachment(b"preview", "image/webp", 1, preview_kind="sticker"),
+                ImageOmission(2, "preview_unavailable"),
+                ImageAttachment(
+                    b"gif-preview", "image/jpeg", 3, preview_kind="animation"
+                ),
+            ),
+        )
+        text = "\n".join(await self.requests(self.last_stream()))
+        self.assertIn("only a static sticker thumbnail", text)
+        self.assertIn("only a static animation thumbnail", text)
+        self.assertIn("animation and motion are unavailable", text)
+        self.assertIn("Telegram message ID: 2 omitted", text)
+        self.assertIn("Telegram did not provide a thumbnail", text)
+        self.assertNotIn("too large", text)
+        parts = [
+            part
+            for event in await self.last_stream().history.get_events()
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+            if isinstance(part, BinaryInput)
+        ]
+        self.assertEqual([part.data for part in parts], [b"preview", b"gif-preview"])
+
+    async def test_animation_reaches_model_as_only_its_first_frame(
+        self,
+    ) -> None:
+        await self.dialogue.reply(
+            (42, None),
+            "Please respond to this media in the context of our conversation.",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+            images=(
+                ImageAttachment(
+                    b"first", "image/jpeg", 1, preview_kind="animation", first_frame=True
+                ),
+                ImageOmission(2, "decode_failed"),
+            ),
+        )
+        events = await self.last_stream().history.get_events()
+        parts = [
+            part
+            for event in events
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+        ]
+        text = "\n".join(part.content for part in parts if isinstance(part, TextInput))
+        self.assertIn("only the first frame from the original animation", text)
+        self.assertIn("Later frames and motion are unavailable", text)
+        self.assertNotIn("thumbnail", text.split("original animation.")[0])
+        self.assertIn("original animation could not be decoded", text)
+        self.assertEqual(
+            [part.data for part in parts if isinstance(part, BinaryInput)],
+            [b"first"],
+        )

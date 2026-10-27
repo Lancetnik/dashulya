@@ -1,10 +1,14 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram.utils.token import TokenValidationError, validate_token
 from dotenv import load_dotenv
+
+# Keep inline image payloads below Telegram's cloud download limit and bound RAM use.
+IMAGE_MAX_BYTES = 20_000_000
 
 
 @dataclass(frozen=True)
@@ -12,17 +16,34 @@ class Settings:
     bot_token: str = field(repr=False)
     openai_api_key: str = field(repr=False)
     owner_user_id: int
-    openai_model: str = "gpt-5.6-luna"
+    exa_api_key: str = field(default="", repr=False)
+    openai_model: str = "gpt-6-luna"
     openai_decision_model: str = "gpt-6-luna"
-    database_path: Path = Path("var/agent/dashulya.sqlite3")
-    memory_path: Path = Path("var/agent/evidence.sqlite3")
+    database_url: str = field(
+        default_factory=lambda: os.getenv(
+            "DATABASE_URL", "postgresql://localhost/dashulya"
+        ),
+        repr=False,
+    )
     log_path: Path = Path("var/logs/dashulya.log")
     bot_timezone: str = "Europe/Moscow"
-    openviking_url: str = "http://127.0.0.1:1933"
-    openviking_manifest: Path = Path("var/agent/import/manifest.json")
-    openviking_api_key: str = field(default="", repr=False)
     healthcheck_path: Path | None = None
-    live_memory_path: Path = Path("var/agent/memory.sqlite3")
+    owner_author_ids: tuple[int, ...] = ()
+
+
+def _author_ids(value: str) -> tuple[int, ...]:
+    error_message = (
+        "OWNER_AUTHOR_IDS must contain nonzero numeric sender IDs separated by commas."
+    )
+    try:
+        result = tuple(
+            dict.fromkeys(int(part.strip()) for part in value.split(",") if part.strip())
+        )
+    except ValueError:
+        raise ValueError(error_message) from None
+    if 0 in result:
+        raise ValueError(error_message)
+    return result
 
 
 def load_settings() -> Settings:
@@ -60,26 +81,31 @@ def load_settings() -> Settings:
             "BOT_TIMEZONE must be a valid IANA timezone, such as Europe/Moscow."
         )
         raise ValueError(error_message) from None
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    try:
+        parsed = urlsplit(database_url)
+        if (
+            parsed.scheme not in {"postgresql", "postgres"}
+            or not parsed.hostname
+            or not parsed.path.strip("/")
+        ):
+            raise ValueError
+    except ValueError:
+        error_message = "Set DATABASE_URL to a PostgreSQL connection URL."
+        raise ValueError(error_message) from None
     return Settings(
         bot_token=token,
         openai_api_key=api_key,
         owner_user_id=owner_user_id,
-        openai_model=os.getenv("OPENAI_MODEL", "").strip() or "gpt-5.6-luna",
+        owner_author_ids=_author_ids(os.getenv("OWNER_AUTHOR_IDS", "")),
+        openai_model=os.getenv("OPENAI_MODEL", "").strip() or "gpt-6-luna",
         openai_decision_model=os.getenv("OPENAI_DECISION_MODEL", "").strip()
         or "gpt-6-luna",
-        database_path=Path(os.getenv("DATABASE_PATH") or "var/agent/dashulya.sqlite3"),
-        memory_path=Path(os.getenv("MEMORY_PATH") or "var/agent/evidence.sqlite3"),
+        database_url=database_url,
         log_path=Path(os.getenv("LOG_PATH") or "var/logs/dashulya.log"),
         bot_timezone=bot_timezone,
-        openviking_url=os.getenv("OPENVIKING_URL", "").strip() or "http://127.0.0.1:1933",
-        openviking_manifest=Path(
-            os.getenv("OPENVIKING_MANIFEST") or "var/agent/import/manifest.json"
-        ),
-        openviking_api_key=os.getenv("OPENVIKING_API_KEY", "").strip(),
+        exa_api_key=os.getenv("EXA_API_KEY", "").strip(),
         healthcheck_path=Path(value)
         if (value := os.getenv("HEALTHCHECK_PATH"))
         else None,
-        live_memory_path=Path(
-            os.getenv("LIVE_MEMORY_PATH") or "var/agent/memory.sqlite3"
-        ),
     )

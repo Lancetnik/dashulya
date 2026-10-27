@@ -3,11 +3,41 @@
 import argparse
 import asyncio
 import json
+import os
 import sqlite3
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+from dashulya.database import Database
 from dashulya.memory.index import build_memory
+from dashulya.memory.migrate import migrate_sqlite
 from dashulya.memory.search import MemorySearch
+
+
+async def run_migration(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> None:
+    load_dotenv()
+    url = os.getenv("DATABASE_URL", "")
+    if not url:
+        parser.error("Set DATABASE_URL before migration.")
+    if not any((args.evidence, args.live, args.groups, args.vectors)):
+        parser.error("Migration requires at least one source file.")
+    database = Database(url)
+    try:
+        result = await migrate_sqlite(
+            database,
+            evidence=args.evidence,
+            live=args.live,
+            groups=args.groups,
+            vectors=args.vectors,
+            chat_id=args.chat_id,
+            owner_user_id=args.owner_user_id,
+        )
+    finally:
+        await database.close()
+    print(json.dumps(result, ensure_ascii=False))
 
 
 async def run() -> None:
@@ -41,7 +71,20 @@ async def run() -> None:
     remember.add_argument("text")
     remember.add_argument("--sources", type=int, nargs="+", required=True)
     remember.add_argument("--kind", choices=("summary", "fact"), default="summary")
+    migrate = commands.add_parser(
+        "migrate",
+        help="Import legacy originals, groups and cached vectors into PostgreSQL.",
+    )
+    migrate.add_argument("--evidence", type=Path)
+    migrate.add_argument("--live", type=Path)
+    migrate.add_argument("--groups", type=Path)
+    migrate.add_argument("--vectors", type=Path)
+    migrate.add_argument("--chat-id", type=int)
+    migrate.add_argument("--owner-user-id", type=int, required=True)
     args = parser.parse_args()
+    if args.command == "migrate":
+        await run_migration(args, parser)
+        return
     try:
         if args.command == "build":
             result = build_memory(args.source, args.index, chat_username=args.chat)

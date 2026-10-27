@@ -2,59 +2,50 @@ from collections.abc import AsyncIterator
 
 from dishka import Provider, provide
 from dishka_ag2 import AG2Scope
+from openai import AsyncOpenAI
 
-from dashulya.domain.memory import ChatHistory, MemoryBackend, MessageRecorder
+from dashulya.ai.embeddings import MemoryEmbeddings
+from dashulya.database import Database
+from dashulya.domain.memory import ChatHistory, ChatMemoryService, MessageRecorder
 from dashulya.main.config import Settings
-from dashulya.memory.ingestion import MemoryIngestion
-from dashulya.memory.live import LiveMemory
-from dashulya.memory.openviking import OpenVikingMemory
-from dashulya.memory.search import MemorySearch
+from dashulya.memory.service import HybridChatMemory
+from dashulya.memory.store import MessageStore
+from dashulya.memory.vectors import EmbeddingCache
 
 
 class MemoryProvider(Provider):
     scope = AG2Scope.APP
 
     @provide
-    async def live(self, settings: Settings) -> LiveMemory:
-        store = LiveMemory(settings.live_memory_path)
+    async def messages(self, database: Database) -> MessageStore:
+        store = MessageStore(database)
         await store.initialize()
         return store
 
     @provide
-    def recorder(self, store: LiveMemory) -> MessageRecorder:
+    def recorder(self, store: MessageStore) -> MessageRecorder:
         return store
 
     @provide
-    def history(self, store: LiveMemory) -> ChatHistory:
+    def history(self, store: MessageStore) -> ChatHistory:
         return store
 
     @provide
     async def memory(
-        self, settings: Settings, store: LiveMemory
-    ) -> AsyncIterator[MemoryBackend]:
-        if not settings.memory_path.is_file():
-            error_message = (
-                "OpenViking requires the exported SQLite index at MEMORY_PATH."
-            )
-            raise ValueError(error_message)
-        if not settings.openviking_manifest.is_file():
-            error_message = (
-                "Set OPENVIKING_MANIFEST to a completed OpenViking import manifest."
-            )
-            raise ValueError(error_message)
-        memory = OpenVikingMemory(
-            await MemorySearch.open(settings.memory_path),
-            settings.openviking_manifest,
-            url=settings.openviking_url,
-            api_key=settings.openviking_api_key,
-            live=store,
-        )
-        await memory.check_ready()
-        ingestion = MemoryIngestion(
-            store, url=settings.openviking_url, api_key=settings.openviking_api_key
-        )
-        await ingestion.start()
+        self, settings: Settings, store: MessageStore
+    ) -> AsyncIterator[ChatMemoryService]:
+        client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
         try:
-            yield memory
+            vectors = EmbeddingCache(store.database, MemoryEmbeddings(client))
+            memory = HybridChatMemory(
+                store,
+                vectors,
+                owner_user_id=settings.owner_user_id,
+            )
+            try:
+                await memory.start()
+                yield memory
+            finally:
+                await memory.close()
         finally:
-            await ingestion.close()
+            await client.close()

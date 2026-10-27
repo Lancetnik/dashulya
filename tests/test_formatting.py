@@ -1,46 +1,74 @@
 import unittest
+from contextlib import nullcontext
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from aiogram.types import MessageEntity
+from aiogram import Bot
+from aiogram.methods import SendMessage, SendRichMessage
+from aiogram.types import Message, MessageEntity
 from aiogram.utils.formatting import sizeof
 
-from dashulya.bot.formatting import render_markdown, rich_message
+from dashulya.bot.formatting import render_markdown
+from dashulya.bot.images import TelegramImages
+from dashulya.bot.reactions import TelegramReactions
+from dashulya.bot.replies import ReplyDelivery
+from dashulya.domain.messages import Reply
 
 
 class MarkdownFormattingTests(unittest.TestCase):
-    def test_native_rich_formatting_preserves_markdown(self) -> None:
-        for markdown in (
-            "**bold**",
-            "# Heading",
-            "| A | B |\n| --- | --- |\n| 1 | 2 |",
-            "<details><summary>Title</summary>\n\nBody\n\n</details>",
-            "`<html>`",
+    def test_literal_bullet_lines_keep_their_visual_line_breaks(self) -> None:
+        markdown = "Summary:\n\n• **First:** original.\n• **Second:** reply."
+        text, entities = self.render(markdown)
+        self.assertEqual(text, "Summary:\n\n• First: original.\n• Second: reply.")
+        self.assertEqual(
+            [entity.extract_from(text) for entity in entities], ["First:", "Second:"]
+        )
+
+    def test_slopwriter_span_markup(self) -> None:
+        for markdown, kind, body in (
+            ("**bold**", "bold", "bold"),
+            ("__bold__", "bold", "bold"),
+            ("*italic*", "italic", "italic"),
+            ("_italic_", "italic", "italic"),
+            ("~~old~~", "strikethrough", "old"),
+            ("^^under^^", "underline", "under"),
+            ("||hidden||", "spoiler", "hidden"),
         ):
             with self.subTest(markdown=markdown):
-                rich = rich_message(markdown)
-                assert rich is not None
-                self.assertEqual(rich.markdown, markdown)
+                text, entities = self.render(markdown)
+                self.assertEqual(text, body)
+                self.assertEqual(
+                    [(e.type, e.offset, e.length) for e in entities],
+                    [(kind, 0, len(body))],
+                )
 
-    def test_plain_text_unsupported_html_and_media_use_text_transport(self) -> None:
-        for markdown in (
-            "",
-            "Hello",
-            "**bold** <script>text</script>",
-            "![alt](https://example.com/image.png)",
-            "<details><summary>Unclosed",
-        ):
-            with self.subTest(markdown=markdown):
-                self.assertIsNone(rich_message(markdown))
+    def test_slopwriter_tables_are_aligned_monospace(self) -> None:
+        text, entities = self.render("| a | b |\n| --- | --- |\n| longer | x |")
+        self.assertEqual(text, "a      | b\n-------+--\nlonger | x")
+        self.assertEqual(len(entities), 1)
+        self.assertEqual(entities[0].type, "pre")
+        self.assertEqual(entities[0].extract_from(text), text)
 
-    def test_rich_limits_fall_back_before_sending(self) -> None:
-        wide_table = "|" + "A|" * 21 + "\n|" + "---|" * 21
-        for markdown in (
-            "**" + "a" * 32768 + "**",
-            "**paragraph**\n\n" * 501,
-            "<details>" * 17 + "text" + "</details>" * 17,
-            wide_table,
-        ):
-            with self.subTest(length=len(markdown)):
-                self.assertIsNone(rich_message(markdown))
+    def test_nested_lists_hashtags_and_autolinks_match_slopwriter(self) -> None:
+        text, entities = self.render(
+            "intro:\n- outer\n  - **inner**\n\n#python #telegram\n\nhttps://example.com/x"
+        )
+        self.assertEqual(
+            text,
+            "intro:\n\n• outer\n  • inner\n\n#python #telegram\n\nhttps://example.com/x",
+        )
+        self.assertEqual(
+            [(e.type, e.extract_from(text)) for e in entities],
+            [("bold", "inner"), ("text_link", "https://example.com/x")],
+        )
+
+    def test_ordinary_paragraphs_are_not_bold(self) -> None:
+        text, entities = self.render(
+            "Summary: *no shared decision*.\n\nOrdinary paragraph with `pytest` and a [source](https://example.com).\n\n*Conclusion:* use selectively."
+        )
+        self.assertIn("Ordinary paragraph", text)
+        self.assertEqual(sum(e.type == "bold" for e in entities), 0)
+        self.assertEqual(sum(e.type == "italic" for e in entities), 2)
 
     def render(self, markdown: str) -> tuple[str, list[MessageEntity]]:
         chunks = list(render_markdown(markdown))
@@ -157,3 +185,94 @@ class MarkdownFormattingTests(unittest.TestCase):
         self.assertEqual(text, "**unfinished [link](broken")
         self.assertEqual(entities, [])
         self.assertEqual(list(render_markdown("")), [])
+
+
+class ReplyFormattingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_formatted_paragraphs_use_entities_without_implicit_bold(self) -> None:
+        bot = Bot("123456789:TEST_ONLY_NOT_A_REAL_BOT_TOKEN")
+        self.addAsyncCleanup(bot.session.close)
+        dialogue = AsyncMock()
+        dialogue.delivery = MagicMock(return_value=nullcontext())
+        dialogue.reply.return_value = Reply(
+            "Summary: *one note*.\n\nOrdinary text. [Source](https://example.com)"
+        )
+        incoming = Message.model_validate({
+            "message_id": 1,
+            "date": 1700000000,
+            "chat": {"id": 42, "type": "private"},
+            "from": {"id": 42, "is_bot": False, "first_name": "Example"},
+            "text": "Question",
+        }).as_(bot)
+        requests = AsyncMock(return_value=True)
+        with patch.object(bot.session, "make_request", requests):
+            await ReplyDelivery(
+                bot,
+                dialogue,
+                TelegramImages(bot, max_bytes=20_000_000),
+                TelegramReactions(bot),
+            ).reply(incoming)
+        sent = [
+            c.args[1]
+            for c in requests.call_args_list
+            if isinstance(c.args[1], (SendMessage, SendRichMessage))
+        ]
+        self.assertEqual(len(sent), 1)
+        assert isinstance(sent[0], SendMessage)
+        self.assertEqual(sent[0].text, "Summary: one note.\n\nOrdinary text. Source")
+        self.assertIsNone(sent[0].parse_mode)
+        self.assertEqual(
+            [e.type for e in sent[0].entities or []], ["italic", "text_link"]
+        )
+
+    async def test_literal_bullet_lines_preserve_links_and_emphasis_in_delivery(
+        self,
+    ) -> None:
+        bot = Bot("123456789:TEST_ONLY_NOT_A_REAL_BOT_TOKEN")
+        self.addAsyncCleanup(bot.session.close)
+        dialogue = AsyncMock()
+        dialogue.delivery = MagicMock(return_value=nullcontext())
+        dialogue.reply.return_value = Reply(
+            "Summary:\n\n• **First:** original. [Source](https://example.com/1)\n"
+            "• **Second:** reply 😀. [Source](https://example.com/2)"
+        )
+        incoming = Message.model_validate({
+            "message_id": 1,
+            "date": datetime(2026, 10, 27, tzinfo=UTC),
+            "chat": {"id": 42, "type": "private"},
+            "from": {"id": 42, "is_bot": False, "first_name": "Example"},
+            "text": "Summarize today",
+        }).as_(bot)
+        requests = AsyncMock(return_value=True)
+        with patch.object(bot.session, "make_request", requests):
+            await ReplyDelivery(
+                bot,
+                dialogue,
+                TelegramImages(bot, max_bytes=20_000_000),
+                TelegramReactions(bot),
+            ).reply(incoming)
+        messages = [
+            c.args[1]
+            for c in requests.call_args_list
+            if isinstance(c.args[1], SendMessage)
+        ]
+        self.assertEqual(len(messages), 1)
+        self.assertFalse(
+            any(isinstance(c.args[1], SendRichMessage) for c in requests.call_args_list)
+        )
+        sent = messages[0]
+        self.assertEqual(
+            sent.text, "Summary:\n\n• First: original. Source\n• Second: reply 😀. Source"
+        )
+        self.assertIsNone(sent.parse_mode)
+        self.assertEqual(
+            [
+                (entity.type, entity.extract_from(sent.text))
+                for entity in sent.entities or []
+            ],
+            [
+                ("bold", "First:"),
+                ("text_link", "Source"),
+                ("bold", "Second:"),
+                ("text_link", "Source"),
+            ],
+        )

@@ -1,3 +1,4 @@
+import base64
 import json
 import unittest
 from datetime import UTC, datetime
@@ -10,8 +11,8 @@ from ag2.config import OpenAIDecisionsConfig, OpenAIResponsesConfig
 
 from dashulya.ai.addressing import GroupAddressing
 from dashulya.ai.dialogue import Dialogue
-from dashulya.domain.memory import ChatHistory, MemoryMessage
-from dashulya.domain.messages import GroupMessage, Reply
+from dashulya.domain.memory import ChatHistory, MemoryMessage, ReplyContext
+from dashulya.domain.messages import GroupMessage, ImageAttachment, Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.memory.search import MemorySearch
@@ -31,7 +32,7 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         requests: list[dict[str, Any]] = []
         history = AsyncMock(spec=ChatHistory)
-        history.context.return_value = [
+        history.context.return_value = ReplyContext((
             MemoryMessage(
                 chat_id=-123,
                 message_id=1,
@@ -51,7 +52,7 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
                 chat_title="Group",
                 reply_to_id=1,
             ),
-        ]
+        ))
 
         def respond(request: httpx2.Request) -> httpx2.Response:
             requests.append(json.loads(request.content))
@@ -111,6 +112,7 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
                     user_name="Anna",
                     sent_at=datetime(2026, 10, 25, tzinfo=UTC),
                     group_context={"message_id": message_id},
+                    images=(ImageAttachment(b"native-image", "image/png", message_id),),
                 )
                 self.assertEqual(result, Reply("Fresh answer", 1))
         self.assertEqual(len(requests), 2)
@@ -119,14 +121,24 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(output_format["type"], "json_schema")
             self.assertTrue(output_format["strict"])
             self.assertEqual(
-                output_format["schema"]["required"], ["text", "reply_to_message_id"]
+                output_format["schema"]["required"],
+                ["text", "reply_to_message_id", "reaction"],
             )
             self.assertFalse(output_format["schema"]["additionalProperties"])
             messages = [entry for entry in request["input"] if entry["role"] != "system"]
             self.assertEqual(
-                [entry["role"] for entry in messages], ["user", "assistant", "user"]
+                [entry["role"] for entry in messages],
+                ["user", "user", "assistant", "user", "user", "user"],
             )
-            self.assertIn("Previously delivered answer", json.dumps(messages[1]))
+            image = messages[-1]["content"][0]
+            self.assertEqual(image["type"], "input_image")
+            self.assertEqual(image["detail"], "high")
+            self.assertEqual(
+                image["image_url"],
+                "data:image/png;base64," + base64.b64encode(b"native-image").decode(),
+            )
+            self.assertNotIn(self.settings.bot_token, json.dumps(request))
+            self.assertIn("Previously delivered answer", json.dumps(messages[2]))
             self.assertNotIn("Fresh answer", json.dumps(messages))
         self.assertNotIn("Current request 3", json.dumps(requests[1]["input"]))
 
@@ -317,3 +329,4 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
             )
         )
         memory.search.assert_awaited_once()
+        self.assertEqual(memory.search.await_args_list[0].args, ("redis",))

@@ -19,8 +19,12 @@ layers =
     bot
     ai
     memory | storage | observability
+    database
     domain
 exhaustive = True
+# The offline importer reuses registry writes; runtime memory stays independent.
+ignore_imports =
+    dashulya.memory.migrate -> dashulya.storage.groups
 
 [importlinter:contract:main-hierarchy]
 name = Application assembly separates runtime, graph, providers and configuration
@@ -40,8 +44,9 @@ type = layers
 containers =
     dashulya.ai
 layers =
-    agents | dialogue | addressing
+    agents | dialogue | addressing | embeddings
     tools
+    message_format
     prompts
 exhaustive = True
 
@@ -53,6 +58,7 @@ source_modules =
     dashulya.memory
     dashulya.storage
     dashulya.observability
+    dashulya.database
 forbidden_modules =
     dishka
     dishka_ag2
@@ -67,8 +73,10 @@ layers =
     router
     handlers
     middlewares | replies
+    reactions
+    images
     messages
-    formatting
+    formatting | media_frames | chat_actions
 exhaustive = True
 
 [importlinter:contract:independent-domain]
@@ -78,6 +86,7 @@ source_modules =
     dashulya.domain
     dashulya.memory
     dashulya.storage
+    dashulya.database
 forbidden_modules =
     aiogram
     ag2
@@ -102,6 +111,7 @@ forbidden_modules =
     dashulya.memory.__main__
     dashulya.memory.index
     dashulya.memory.openviking_index
+    dashulya.memory.migrate
 
 [importlinter:contract:runtime-without-evaluations]
 name = Application does not depend on evaluation infrastructure

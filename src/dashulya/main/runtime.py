@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import os
+from urllib.parse import urlsplit
 
 from aiogram import Bot, Dispatcher
 
-from dashulya.domain.memory import MemoryBackend
+from dashulya.domain.memory import ChatMemoryService
 from dashulya.main.config import Settings, load_settings
 from dashulya.main.container import create_container
 from dashulya.observability import configure_logging, exception_fields
@@ -17,12 +18,12 @@ async def run(settings: Settings) -> None:
         settings.healthcheck_path.unlink(missing_ok=True)
     container = create_container(settings)
     try:
-        await container.get(MemoryBackend)
+        await container.get(ChatMemoryService)
         logger.info(
             "Bot starting",
             extra={
                 "model": settings.openai_model,
-                "memory_backend": "openviking",
+                "memory_backend": "pgvector",
             },
         )
         bot = await container.get(Bot)
@@ -51,7 +52,9 @@ def main() -> None:
         secrets=(
             settings.bot_token,
             settings.openai_api_key,
-            settings.openviking_api_key,
+            settings.exa_api_key,
+            settings.database_url,
+            urlsplit(settings.database_url).password or "",
         ),
     )
     try:

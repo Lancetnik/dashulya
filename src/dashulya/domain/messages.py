@@ -1,8 +1,23 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
 ConversationKey = tuple[int, int | None]
+
+
+@dataclass(frozen=True)
+class ImageAttachment:
+    data: bytes = field(repr=False)
+    media_type: Literal["image/jpeg", "image/png", "image/webp"]
+    message_id: int
+    preview_kind: Literal["sticker", "animation"] | None = None
+    first_frame: bool = False
+
+
+@dataclass(frozen=True)
+class ImageOmission:
+    message_id: int
+    reason: Literal["too_large", "preview_unavailable", "decode_failed"] = "too_large"
 
 
 @dataclass(frozen=True)
@@ -22,6 +37,7 @@ class AddressingDecision:
 class Reply:
     text: str
     reply_to_message_id: int | None = None
+    reaction: str | None = None
 
 
 @dataclass(frozen=True)

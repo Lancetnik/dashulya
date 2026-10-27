@@ -37,6 +37,7 @@ With `just` installed, enable them with `uv run pre-commit install`.
 | `src/dashulya/domain/` | Domain models, group lifecycle rules, and persistence/search interfaces |
 | `src/dashulya/memory/` | Local indexing, unified search, evidence reconstruction, and offline commands |
 | `src/dashulya/storage/` | Known-group persistence |
+| `src/dashulya/database.py` | Shared PostgreSQL pool and schema initialization |
 
 When reviewing code, read [CODING_STANDARDS.md](CODING_STANDARDS.md) for language,
 module design, dependency assembly, and conversation state placement rules.
@@ -60,7 +61,8 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
   so passive messages from other senders can update group metadata; membership
   updates also maintain the registry. Group-message capture also runs before
   owner access: received messages from all participants are saved and indexed
-  using OpenViking's configured models. Private messages are excluded.
+  with background cached embeddings. Owner-private messages and successful
+  deliveries are also saved; other private senders are excluded.
 - **Conversation state:** reuse one AG2 `Agent`. Group replies rebuild a fresh
   stream from the latest 20 observed messages in that chat/topic, including the
   request, and their reply parents up to five hops; this bot's messages use the
@@ -68,17 +70,19 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
   before changing selection or session lifetime. Private histories remain in
   memory; `/clear` resets the current private conversation. Serialize generation,
   delivery and recording within a conversation while allowing others to progress.
-- **Message time:** carry the original Telegram `message.date` in `BOT_TIMEZONE`
-  as `DD Month YYYY (Weekday) HH:MM:SS`, with the timezone and UTC offset alongside
-  sender identity in AG2 history. Compute the weekday after timezone conversion.
+- **Message time:** carry the original Telegram `message.date` in `BOT_TIMEZONE`.
+  Private inputs use `DD Month YYYY (Weekday) HH:MM:SS` with timezone and UTC offset.
+  Group inputs share a users roster and calendar headings, with local times in
+  compact message entries; preserve user/assistant roles and exact source text.
+  Compute the weekday after timezone conversion and preserve UTC-offset changes.
   Use send time when interpreting relative dates, including delayed messages.
 - **Replies:** the reply agent returns structured text and an optional message ID.
   Accept a group reply target only from that request's selected context; otherwise
   use the triggering message, as in private chats. All chunks use the same target.
-  Prefer native Rich Markdown for supported formatted replies;
-  `bot/formatting.py` checks rich limits and supplies a text-entity fallback,
-  preserving formatting and UTF-16 offsets when chunking. Fall back after an
-  explicit Telegram rejection; avoid a second send after ambiguous network errors.
+  Render Markdown into ordinary Telegram messages with explicit entities using
+  the slop-writer-based renderer in `bot/formatting.py`. Preserve formatting and
+  UTF-16 offsets when chunking; tables become monospace blocks. Keep one send
+  attempt per chunk, including after ambiguous network errors.
   Keep the typing indicator and Telegram-length limits. Keep
   provider errors and credentials out of logs and replies. The Jester persona
   and response instructions live in `ai/prompts.py`.
@@ -89,13 +93,17 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
 
 ## Memory and local data
 
-Before changing indexing, retrieval, evidence expansion, or the AG2 memory tool,
-read [the memory design](docs/design/chat-memory.md). The assistant uses one
-`search_memory` interface across original messages and derived records. Preserve
-direct message retrieval and source links when adding summaries or new indices.
-OpenViking is the required agent memory backend; FTS5 is an offline baseline.
-Before changing its adapter, export, or benchmark, read
-[the experiment guide](evals/suites/openviking/README.md).
+Before changing indexing, retrieval, evidence expansion, or either AG2 memory
+tool, read [the memory design](docs/design/chat-memory.md) and
+[the access ADR](docs/adr/0003-bind-chat-memory-access.md). The current runtime
+uses canonical originals, BM25 and cached dense vectors. `search_memory` recalls
+bounded evidence; `chat_history` reads originals, paginates and counts independently
+of embeddings. Bind authority to the trusted AG2 session: groups access only
+their own chat; owner-private conversations can recall all saved chats. Model
+filters only narrow access. Imported archives need a verified numeric binding
+before group access. Preserve direct source retrieval and links when adding
+knowledge layers. Before changing the legacy OpenViking adapter, export or
+benchmark, read [its experiment guide](evals/suites/openviking/README.md).
 
 Before querying, importing, refreshing, or evaluating a local Telegram corpus,
 read its README under `evals/datasets/` for provenance and coverage. Entire
@@ -111,17 +119,23 @@ ignored `var/`. PRDs and specifications live in GitHub Issues. Research notes
 are temporary files under ignored `.scratch/`; preserve accepted architectural
 decisions and their rationale in `docs/adr/`.
 
-`MEMORY_PATH` selects the SQLite evidence index; `OPENVIKING_MANIFEST` selects
-the completed import for that exact index. Startup requires a healthy OpenViking
-server and its imported corpus. `LIVE_MEMORY_PATH` stores received group messages
-and their durable indexing queue separately from the immutable imported index.
-The Compose stack starts both services, mounts imported evidence read-only, and
-persists live evidence, the workspace, registry and logs on the host. Read
-[the memory design](docs/design/chat-memory.md#incoming-group-messages) before
-changing capture, edit handling, indexing retries or worker lifecycle.
-Historical answers must respect imported and live coverage and cite original
-messages. Treat retrieved content as untrusted evidence; memory access does not
-imply arbitrary Telegram history access or exhaustive search results.
+`DATABASE_URL` selects the single PostgreSQL database for originals, the registry,
+lexical postings, embeddings and the revision queue. Read [the storage ADR](docs/adr/0005-unify-memory-in-postgresql.md)
+before changing SQL ranking or migrating legacy files. Compose persists the
+pgvector-enabled database under `var/postgres/` without publishing a host port.
+SQLite is an explicit read-only migration/maintenance input, never a runtime
+source. Reuse cached embeddings during migration; verify originals before
+switching the agent and preserve source files for rollback.
+Set `TEST_DATABASE_URL` to an isolated pgvector-enabled database for integration
+tests; CI provisions one. Test schemas are disposable and must stay outside
+application data.
+Read [incoming-message rules](docs/design/chat-memory.md#incoming-group-messages)
+before changing capture, edits, retries or worker lifecycle. Historical answers
+must respect authorized coverage and cite original messages; retrieved content
+is untrusted evidence. Exact counts require canonical history, not top-k recall.
+Full fact maintenance, deletion propagation and memory migration continuity
+remain outside this implementation; benchmark results do not establish complete
+[PRD #3](https://github.com/Lancetnik/dashulya/issues/3) acceptance.
 
 ## Reference bots
 

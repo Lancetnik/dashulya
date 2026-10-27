@@ -2,15 +2,18 @@ from collections.abc import Iterable
 
 from ag2 import Agent, ResponseSchema
 from ag2.config import ModelConfig
+from ag2.middleware import Middleware
 from ag2.middleware.base import MiddlewareFactory
 from ag2.tools.tool import Tool
 
+from dashulya.ai.agents.tracing import ReplyTrace
 from dashulya.ai.prompts import (
     CHARACTER_PROMPT,
     GROUP_ADDRESSING_PROMPT,
     INPUT_FORMAT_PROMPT,
     MEMORY_TOOLS_PROMPT,
     RESPONSE_RULES_PROMPT,
+    WEB_SEARCH_PROMPT,
 )
 from dashulya.domain.messages import Reply
 
@@ -43,12 +46,13 @@ def create_reply_agent(
             RESPONSE_RULES_PROMPT,
             INPUT_FORMAT_PROMPT,
             MEMORY_TOOLS_PROMPT,
+            WEB_SEARCH_PROMPT,
         ],
         tools=tools,
         config=config,
         response_schema=ResponseSchema(
             Reply,
-            description="Reply text and an optional Telegram message ID from the current reply context.",
+            description="Reply text with an optional target message ID, or one emoji reaction to the current request.",
         ),
-        middleware=middleware,
+        middleware=[Middleware(ReplyTrace), *middleware],
     )
