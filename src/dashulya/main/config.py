@@ -7,6 +7,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from aiogram.utils.token import TokenValidationError, validate_token
 from dotenv import load_dotenv
 
+# Keep inline image payloads below Telegram's cloud download limit and bound RAM use.
+IMAGE_MAX_BYTES = 20_000_000
+
 
 @dataclass(frozen=True)
 class Settings:

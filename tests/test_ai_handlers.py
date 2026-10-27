@@ -1,4 +1,5 @@
 import json
+from collections.abc import AsyncGenerator
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from tempfile import TemporaryDirectory
@@ -9,10 +10,10 @@ from ag2 import Agent
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.methods import SendMessage, SendRichMessage, TelegramMethod
-from aiogram.types import Message, Update, User
+from aiogram.types import File, Message, Update, User
 
 from dashulya.bot.formatting import text_chunks
-from dashulya.domain.messages import Reply
+from dashulya.domain.messages import ImageOmission, Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.storage.groups import GroupStore
@@ -30,6 +31,16 @@ BOT_USER: dict[str, Any] = {"id": 123456789, "is_bot": True, "first_name": "Dash
 USER: dict[str, Any] = {"id": 42, "is_bot": False, "first_name": "Anna"}
 PRIVATE: dict[str, Any] = {"id": 42, "type": "private", "first_name": "Anna"}
 GROUP: dict[str, Any] = {"id": -123, "type": "supergroup", "title": "Test"}
+PHOTO = [{"file_id": "photo", "file_unique_id": "unique", "width": 2, "height": 2}]
+PNG = b"\x89PNG\r\n\x1a\nimage-data"
+ANIMATION: dict[str, Any] = {
+    "file_id": "animation",
+    "file_unique_id": "animation",
+    "width": 320,
+    "height": 240,
+    "duration": 3,
+    "thumbnail": {**PHOTO[0], "file_id": "thumbnail"},
+}
 
 
 class AIHandlerTests(PostgresTestCase):
@@ -72,6 +83,23 @@ class AIHandlerTests(PostgresTestCase):
         self.groups = await self.container.get(GroupStore)
         self.dispatcher = await self.container.get(Dispatcher)
         self.update_id = 0
+        self.get_file = AsyncMock(
+            return_value=File(
+                file_id="photo", file_unique_id="unique", file_path="photos/image.png"
+            )
+        )
+
+        async def stream(*args: Any, **kwargs: Any) -> AsyncGenerator[bytes]:
+            yield PNG
+
+        self.download = MagicMock(side_effect=stream)
+        for target, name, replacement in (
+            (self.bot, "get_file", self.get_file),
+            (self.bot.session, "stream_content", self.download),
+        ):
+            patcher = patch.object(target, name, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     async def request(
         self, bot: Bot, method: TelegramMethod[Any], **kwargs: Any
@@ -271,6 +299,7 @@ class AIHandlerTests(PostgresTestCase):
         for text in ("/start", "/help", "/groups", "/unknown", "/help@other_bot"):
             await self.message(text)
         await self.message(
+            chat=GROUP,
             sticker={
                 "file_id": "x",
                 "file_unique_id": "x",
@@ -279,7 +308,7 @@ class AIHandlerTests(PostgresTestCase):
                 "height": 1,
                 "is_animated": False,
                 "is_video": False,
-            }
+            },
         )
         await self.message("Hi", sender=BOT_USER)
         await self.message("Group chatter", chat=GROUP)
@@ -517,3 +546,209 @@ class AIHandlerTests(PostgresTestCase):
         for chunk in chunks:
             self.assertLessEqual(len(chunk.encode("utf-16-le")) // 2, 4096)
         self.assertEqual(list(text_chunks("")), [])
+
+    async def test_private_photo_and_image_document_reach_dialogue_as_bytes(self) -> None:
+        for fields in (
+            {"photo": PHOTO},
+            {
+                "document": {
+                    "file_id": "document",
+                    "file_unique_id": "doc",
+                    "mime_type": "image/png",
+                },
+                "caption": "Read the text",
+            },
+        ):
+            await self.message(**fields)
+            image = self.dialogue.reply.call_args.kwargs["images"][0]
+            self.assertEqual(image.data, PNG)
+            self.assertEqual(image.media_type, "image/png")
+        self.assertEqual(self.dialogue.reply.await_count, 2)
+        self.assertEqual(self.dialogue.reply.call_args.args[1], "Read the text")
+        self.decision_agent.ask.assert_not_awaited()
+
+    async def test_caption_mentions_and_names_preserve_group_addressing(self) -> None:
+        await self.message(
+            chat=GROUP,
+            photo=PHOTO,
+            caption="@dashulya_bot inspect",
+            caption_entities=[{"type": "mention", "offset": 0, "length": 13}],
+        )
+        self.dialogue.reply.assert_awaited_once()
+        self.decision_agent.ask.assert_not_awaited()
+        self.decision_agent.ask.return_value.content.return_value = True
+        await self.message(chat=GROUP, photo=PHOTO, caption="Dashulya, inspect")
+        self.decision_agent.ask.assert_awaited_once()
+        self.assertEqual(self.dialogue.reply.await_count, 2)
+
+    async def test_outsider_and_rejected_group_photos_are_never_downloaded(self) -> None:
+        await self.message(photo=PHOTO, sender={**USER, "id": 43})
+        await self.message(chat=GROUP, photo=PHOTO, caption="Dashulya said this")
+        await self.message(chat=GROUP, photo=PHOTO)
+        self.get_file.assert_not_awaited()
+        self.download.assert_not_called()
+        self.dialogue.reply.assert_not_awaited()
+
+    async def test_text_request_can_inspect_its_reply_image(self) -> None:
+        await self.message(
+            "@dashulya_bot explain",
+            chat=GROUP,
+            entities=[{"type": "mention", "offset": 0, "length": 13}],
+            reply_to_message={
+                "message_id": 100,
+                "date": 1700000000,
+                "chat": GROUP,
+                "from": USER,
+                "photo": PHOTO,
+            },
+        )
+        images = self.dialogue.reply.call_args.kwargs["images"]
+        self.assertEqual(images[0].message_id, 100)
+        self.assertEqual(images[0].data, PNG)
+
+    async def test_oversized_image_reaches_agent_as_omission_without_download(
+        self,
+    ) -> None:
+        await self.message(photo=[{**PHOTO[0], "file_size": 20_000_001}])
+        self.get_file.assert_not_awaited()
+        self.download.assert_not_called()
+        self.dialogue.reply.assert_awaited_once()
+        self.assertEqual(
+            self.dialogue.reply.call_args.kwargs["images"], (ImageOmission(1),)
+        )
+
+    async def test_image_download_failure_does_not_expose_token(self) -> None:
+        self.get_file.side_effect = RuntimeError(self.bot.token)
+        with self.assertLogs("dashulya.bot.replies", level="WARNING") as logs:
+            await self.message(photo=PHOTO)
+        self.dialogue.reply.assert_not_awaited()
+        self.assertNotIn(self.bot.token, str(logs.output))
+        self.assertNotIn(self.bot.token, self.replies()[-1].text)
+
+    async def test_stickers_of_every_format_invoke_private_reply(self) -> None:
+        for format_flag in (None, "is_animated", "is_video"):
+            sticker = {
+                "file_id": "sticker",
+                "file_unique_id": "unique",
+                "type": "regular",
+                "width": 512,
+                "height": 512,
+                "is_animated": format_flag == "is_animated",
+                "is_video": format_flag == "is_video",
+                "thumbnail": {**PHOTO[0], "file_id": "thumbnail"},
+            }
+            await self.message(sticker=sticker)
+            images = self.dialogue.reply.call_args.kwargs["images"]
+            self.assertEqual(
+                images[0].preview_kind, "sticker" if format_flag is not None else None
+            )
+            self.assertEqual(
+                self.dialogue.reply.call_args.args[1], "Please respond to the sticker."
+            )
+        self.assertEqual(self.dialogue.reply.await_count, 3)
+
+    async def test_unaddressed_and_outsider_stickers_are_never_downloaded(self) -> None:
+        sticker = {
+            "file_id": "sticker",
+            "file_unique_id": "unique",
+            "type": "regular",
+            "width": 512,
+            "height": 512,
+            "is_animated": False,
+            "is_video": False,
+        }
+        await self.message(chat=GROUP, sticker=sticker)
+        await self.message(sticker=sticker, sender={**USER, "id": 43})
+        self.dialogue.reply.assert_not_awaited()
+        self.get_file.assert_not_awaited()
+        self.download.assert_not_called()
+
+    async def test_group_sticker_reply_to_bot_and_question_about_sticker(self) -> None:
+        sticker = {
+            "file_id": "sticker",
+            "file_unique_id": "unique",
+            "type": "regular",
+            "width": 512,
+            "height": 512,
+            "is_animated": True,
+            "is_video": False,
+            "thumbnail": {**PHOTO[0], "file_id": "thumbnail"},
+        }
+        await self.message(
+            chat=GROUP,
+            sticker=sticker,
+            reply_to_message={
+                "message_id": 100,
+                "date": 1700000000,
+                "chat": GROUP,
+                "from": BOT_USER,
+                "text": "Hello",
+            },
+        )
+        self.dialogue.reply.assert_awaited_once()
+        self.decision_agent.ask.assert_not_awaited()
+        await self.message(
+            "@dashulya_bot what does this mean?",
+            chat=GROUP,
+            entities=[{"type": "mention", "offset": 0, "length": 13}],
+            reply_to_message={
+                "message_id": 101,
+                "date": 1700000000,
+                "chat": GROUP,
+                "from": USER,
+                "sticker": sticker,
+            },
+        )
+        self.assertEqual(self.dialogue.reply.await_count, 2)
+        self.assertEqual(
+            self.dialogue.reply.call_args.kwargs["images"][0].message_id, 101
+        )
+        self.assertEqual(self.get_file.await_args_list[-1].args, ("thumbnail",))
+
+    async def test_private_and_caption_addressed_gif_use_animation_previews(self) -> None:
+        await self.message(animation=ANIMATION)
+        self.assertEqual(
+            self.dialogue.reply.call_args.kwargs["images"][0].preview_kind, "animation"
+        )
+        await self.message(
+            chat=GROUP,
+            animation=ANIMATION,
+            caption="@dashulya_bot explain",
+            caption_entities=[{"type": "mention", "offset": 0, "length": 13}],
+        )
+        self.assertEqual(self.dialogue.reply.await_count, 2)
+        self.decision_agent.ask.assert_not_awaited()
+        self.assertEqual(self.get_file.await_args_list[-1].args, ("thumbnail",))
+
+    async def test_unaddressed_and_outsider_gifs_never_download(self) -> None:
+        await self.message(animation=ANIMATION, sender={**USER, "id": 43})
+        await self.message(chat=GROUP, animation=ANIMATION)
+        self.get_file.assert_not_awaited()
+        self.download.assert_not_called()
+        self.dialogue.reply.assert_not_awaited()
+
+    async def test_question_replying_to_gif_and_missing_preview_preserve_dialogue(
+        self,
+    ) -> None:
+        await self.message(
+            "@dashulya_bot explain",
+            chat=GROUP,
+            entities=[{"type": "mention", "offset": 0, "length": 13}],
+            reply_to_message={
+                "message_id": 100,
+                "date": 1700000000,
+                "chat": GROUP,
+                "from": USER,
+                "animation": ANIMATION,
+            },
+        )
+        self.assertEqual(
+            self.dialogue.reply.call_args.kwargs["images"][0].message_id, 100
+        )
+        self.get_file.reset_mock()
+        await self.message(animation={**ANIMATION, "thumbnail": None})
+        self.get_file.assert_not_awaited()
+        self.assertEqual(
+            self.dialogue.reply.call_args.kwargs["images"],
+            (ImageOmission(self.update_id, "preview_unavailable"),),
+        )

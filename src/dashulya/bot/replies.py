@@ -8,6 +8,7 @@ from aiogram.utils.chat_action import ChatActionSender
 
 from dashulya.ai.dialogue import Dialogue
 from dashulya.bot.formatting import render_markdown, rich_message
+from dashulya.bot.images import ImageInputError, TelegramImages
 from dashulya.bot.messages import conversation_key
 from dashulya.observability import exception_fields
 
@@ -15,9 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 class ReplyDelivery:
-    def __init__(self, bot: Bot, dialogue: Dialogue) -> None:
+    def __init__(self, bot: Bot, dialogue: Dialogue, images: TelegramImages) -> None:
         self._bot = bot
         self._dialogue = dialogue
+        self._images = images
 
     async def reply(
         self,
@@ -31,8 +33,7 @@ class ReplyDelivery:
     async def _reply(
         self, message: Message, *, group_context: dict[str, object] | None
     ) -> None:
-        # The router accepts only text messages with a sender.
-        assert message.text is not None
+        # Owner access and addressing have already succeeded before any download.
         assert message.from_user is not None
         started = perf_counter()
         context: dict[str, object] = {
@@ -49,14 +50,22 @@ class ReplyDelivery:
             else None,
         ):
             try:
+                images = await self._images.load(message)
                 reply = await self._dialogue.reply(
                     conversation_key(message),
-                    message.text,
+                    message.text
+                    or message.caption
+                    or (
+                        "Please respond to the sticker."
+                        if message.sticker
+                        else "Please describe the attached image."
+                    ),
                     user_id=message.from_user.id,
                     user_name=message.from_user.full_name,
                     sent_at=message.date,
                     message_id=message.message_id,
                     group_context=group_context,
+                    **({"images": images} if images else {}),
                 )
                 text = reply.text
                 reply_to_message_id = reply.reply_to_message_id or message.message_id
@@ -68,6 +77,8 @@ class ReplyDelivery:
                         "reply_to_message_id": reply_to_message_id,
                     },
                 )
+            except ImageInputError as error:
+                text = str(error)
             except Exception as error:
                 # Provider errors can contain request data; keep those out of logs and replies.
                 logger.warning(

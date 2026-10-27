@@ -72,6 +72,7 @@ layers =
     router
     handlers
     middlewares | replies
+    images
     messages
     formatting
 exhaustive = True

@@ -94,9 +94,40 @@ Capture runs before owner authorization for every delivered group/supergroup
 message, including participants who cannot invoke the bot. Owner-private
 messages are also captured; other private senders are excluded. Edited updates
 use the same recorder without invoking a reply. Service events are excluded.
-Text, captions and attachment types are stored; attachment contents are not
-downloaded or transcribed. Incoming reply snapshots can fill missing parents
+Text, captions and attachment types are stored; passive capture does not download
+or transcribe attachment contents. Incoming reply snapshots can fill missing parents
 without overwriting recorded originals or their deeper reply relationships.
+
+After owner
+authorization and a positive addressing decision, the reply path can download the
+current photo/image document and its direct reply parent's image into RAM. JPEG,
+PNG and WebP signatures are checked, and their combined bytes are capped at
+20,000,000 during streaming. An image known to exceed the remaining budget is
+not downloaded and instead produces an explicit oversized-image note for the
+reply agent. An overflow
+discovered while streaming stops the download and produces the same note.
+Native AG2 image inputs and omission notes accompany the question, labelled
+with their source message IDs. Group inputs are restricted
+to the selected reply context. No image bytes or generated descriptions are
+written to the evidence database or indexed in OpenViking. Older group media
+remain placeholders. Private images stay only in bounded in-memory history.
+
+The same reply path accepts sticker messages and direct-reply stickers. Static
+stickers use their image bytes; animated and video stickers use Telegram's
+JPEG/WebP thumbnail, never the original TGS/WEBM animation. Native inputs label
+thumbnails as previews with motion unavailable. An absent thumbnail produces a
+specific omission note without a download; oversized originals/previews retain
+the existing byte-budget omission. Regular, mask and custom-emoji sticker
+objects use these same format rules. Capture still records only the attachment
+type and original message evidence; no sticker image or description is indexed.
+
+Telegram animations (GIF or silent MP4) and GIF documents use their static
+thumbnail with an animation-preview label. The animation field takes precedence
+over the duplicate document field Telegram may include for compatibility.
+Missing/oversized thumbnails produce omission notes without downloading the
+animation. The same path accepts current animations and direct reply parents;
+passive capture and durable evidence remain unchanged.
+
 
 Successfully delivered group and owner-private responses, including command
 responses, are recorded with Telegram-assigned IDs, send times and reply

@@ -19,7 +19,7 @@ from dashulya.domain.memory import (
     MemoryBackend,
 )
 from dashulya.domain.messages import Reply
-from dashulya.main.config import Settings
+from dashulya.main.config import IMAGE_MAX_BYTES, Settings
 
 
 class AgentProvider(Provider):
@@ -99,6 +99,7 @@ class AgentProvider(Provider):
             history=history,
             bot_id=bot.id,
             memory=memory,
+            max_image_bytes=IMAGE_MAX_BYTES,
         )
 
     @provide
