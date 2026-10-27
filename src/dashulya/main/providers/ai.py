@@ -10,6 +10,7 @@ from dashulya.ai.agents.models import AgentModels, create_models
 from dashulya.ai.dialogue import Dialogue
 from dashulya.ai.tools.history import chat_history
 from dashulya.ai.tools.memory import search_memory
+from dashulya.ai.tools.web import create_web_tools
 from dashulya.domain.memory import (
     ChatHistory,
     ChatMemoryService,
@@ -47,10 +48,11 @@ class AgentProvider(Provider):
         models: AgentModels,
         container: AsyncContainer,
         memory: ChatMemoryService,
+        settings: Settings,
     ) -> Agent[Reply]:
         return create_reply_agent(
             models.reply,
-            tools=[search_memory, chat_history],
+            tools=[search_memory, chat_history, *create_web_tools(settings.exa_api_key)],
             middleware=[Middleware(DishkaAsyncMiddleware, container=container)],
         )
 

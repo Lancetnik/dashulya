@@ -52,6 +52,7 @@ def main() -> None:
         secrets=(
             settings.bot_token,
             settings.openai_api_key,
+            settings.exa_api_key,
             settings.database_url,
             urlsplit(settings.database_url).password or "",
         ),

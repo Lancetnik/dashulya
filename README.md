@@ -39,6 +39,8 @@ and [Ostrikov's chat](https://t.me/aostrikov_agents_chat)
   the owner's private messages, including edits and successfully delivered replies.
 - **Inspect original history.** Read full sources, page through saved messages,
   resolve sender identities and count literal matches independently of embeddings.
+- **Search the web.** With `EXA_API_KEY` configured, find current public information
+  through Exa and read source pages, with links in the answer.
 - **Keep track of groups.** List groups the bot has observed, preserving the
   registry across restarts.
 
@@ -59,7 +61,7 @@ completed vectors and pending message revisions survive restarts. Original
 history reads remain available during embedding outages. A semantic-query
 failure is reported through the tool rather than silently claiming a complete
 search. Historical backfill, maintained-fact writes/corrections, deletion
-synchronization, full memory continuity across group migrations and web search
+synchronization, full memory continuity across group migrations
 are not implemented. [ADR 0005](docs/adr/0005-unify-memory-in-postgresql.md)
 records the storage decision.
 
@@ -155,6 +157,14 @@ Telegram user ID for `OWNER_USER_ID`. The existing local setup already has
 credentials. Your `.env` stays out of Git and the Docker build context. The reply
 and addressing models default to `gpt-6-luna`; model, timezone and local storage
 settings are listed in [.env.example](.env.example).
+
+Set `EXA_API_KEY` to enable the AG2 [Exa tools](https://docs.ag2.ai/docs/user-guide/extensions/tools/search/exa/).
+The reply agent receives `exa_search` (five results with bounded text excerpts) and
+`exa_get_contents` (up to three public URLs per call). Without the key, those tools
+are absent and conversations and chat memory remain available. The addressing
+classifier never receives web tools. Search and page contents are untrusted evidence;
+answers should cite their original URLs. Web-tool failures are reported without
+provider payloads, and each call has a 30-second deadline.
 
 Generate `POSTGRES_PASSWORD` with `openssl rand -hex 32`. Keep it stable for an
 existing database. Compose supplies the internal `DATABASE_URL`; direct Python

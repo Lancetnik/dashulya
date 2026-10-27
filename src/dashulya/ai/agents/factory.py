@@ -11,6 +11,7 @@ from dashulya.ai.prompts import (
     INPUT_FORMAT_PROMPT,
     MEMORY_TOOLS_PROMPT,
     RESPONSE_RULES_PROMPT,
+    WEB_SEARCH_PROMPT,
 )
 from dashulya.domain.messages import Reply
 
@@ -43,6 +44,7 @@ def create_reply_agent(
             RESPONSE_RULES_PROMPT,
             INPUT_FORMAT_PROMPT,
             MEMORY_TOOLS_PROMPT,
+            WEB_SEARCH_PROMPT,
         ],
         tools=tools,
         config=config,

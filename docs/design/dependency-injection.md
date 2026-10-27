@@ -78,6 +78,14 @@ The reply agent has an AG2 `ResponseSchema[Reply]` for `text` and nullable
 group-context snapshot that seeded the stream; private replies retain the default
 target. The result crosses into `bot` as the domain's `Reply`, with no AG2 objects.
 
+When `EXA_API_KEY` is configured, `AgentProvider` also registers the search and
+content-reading subset of AG2 `ExaToolkit`, assembled by `ai/tools/web.py`. The
+addressing agent has no web tools. The toolkit creates an async SDK client for
+each call and closes it in `finally`; no client is retained by the application
+container. Tool middleware bounds requests, content and duration, sanitizes provider
+failures before they enter AG2 history, and propagates cancellation. The key is
+excluded from settings repr and included in log redaction.
+
 `ReplyDelivery` remains in `bot`: it owns Telegram typing, redacted failure
 handling, and rich/text delivery. Only an explicit Telegram rejection permits
 fallback. Domain messages carry no aiogram objects.

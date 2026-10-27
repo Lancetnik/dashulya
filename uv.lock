@@ -411,6 +411,7 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "dishka" },
     { name = "dishka-ag2" },
+    { name = "exa-py" },
     { name = "markdown-it-py" },
     { name = "openviking-sdk" },
     { name = "psycopg", extra = ["binary", "pool"] },
@@ -444,6 +445,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21,<1" },
     { name = "dishka", specifier = ">=1.7,<2" },
     { name = "dishka-ag2", specifier = ">=1,<2" },
+    { name = "exa-py", specifier = ">=2.12.1,<3" },
     { name = "markdown-it-py", specifier = ">=4,<5" },
     { name = "openviking-sdk", specifier = "==0.1.16" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2,<4" },
@@ -512,6 +514,24 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/68/bc/d36966de7304047a1001a7559fbf266c464bb5d8cc85464536ef8c9bcc32/distlib-0.4.4.tar.gz", hash = "sha256:ca4175b4ac7f71223cc30ed7248c45d2b38c2439d8ee6e498ab67ed63cf3508d", size = 621304, upload-time = "2026-10-16T13:56:34.203Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/2b/238f02a4927fa2e27aa995371d240a468b52e42eae44a678434aff736b38/distlib-0.4.4-py2.py3-none-any.whl", hash = "sha256:cf09d55b1e85a89576b036aeb71550bfd68320f3f21761ca329eadadad918638", size = 472099, upload-time = "2026-10-16T13:56:32.053Z" },
+]
+
+[[package]]
+name = "exa-py"
+version = "2.26.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpcore" },
+    { name = "httpx" },
+    { name = "openai" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "requests" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/23/61/adb9293f0fab367b56d8b1572d279c0f338dd29e0c2e72eea01eba87190a/exa_py-2.26.0.tar.gz", hash = "sha256:906dd61d44f106a7103e12f00cb5773d62ace3d3b9ebe27298ec9766a52851ed", size = 110687, upload-time = "2026-10-19T19:07:11.261Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/cf/6164cba916906fd0adfdcb42591a2d12a5fc187c5641a2d97ab97b88798a/exa_py-2.26.0-py3-none-any.whl", hash = "sha256:010f9774642debce0b95ef6a69f4e9a36c3e9160f024f9f3d43ac6d0c98ee58f", size = 137067, upload-time = "2026-10-19T19:07:10.095Z" },
 ]
 
 [[package]]

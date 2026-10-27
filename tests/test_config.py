@@ -115,3 +115,22 @@ class SettingsTests(unittest.TestCase):
             os.environ["DATABASE_URL"] = "postgresql://localhost/dashulya"
             os.environ["OWNER_USER_ID"] = " 1234567890123 "
             self.assertEqual(load_settings().owner_user_id, 1234567890123)
+
+    @patch("dashulya.main.config.load_dotenv")
+    def test_exa_key_is_optional_trimmed_and_hidden(
+        self, mock_load_dotenv: unittest.mock.MagicMock
+    ) -> None:
+        env = {
+            "BOT_TOKEN": BOT_TOKEN,
+            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Synthetic key.
+            "OWNER_USER_ID": "42",
+            "DATABASE_URL": "postgresql://localhost/dashulya",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(load_settings().exa_api_key, "")
+            os.environ["EXA_API_KEY"] = " exa-test-only "
+            settings = load_settings()
+            self.assertEqual(settings.exa_api_key, "exa-test-only")
+            self.assertNotIn("exa-test-only", repr(settings))
+            os.environ["EXA_API_KEY"] = " "
+            self.assertEqual(load_settings().exa_api_key, "")

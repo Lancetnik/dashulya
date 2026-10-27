@@ -13,6 +13,7 @@ class Settings:
     bot_token: str = field(repr=False)
     openai_api_key: str = field(repr=False)
     owner_user_id: int
+    exa_api_key: str = field(default="", repr=False)
     openai_model: str = "gpt-6-luna"
     openai_decision_model: str = "gpt-6-luna"
     database_url: str = field(
@@ -83,6 +84,7 @@ def load_settings() -> Settings:
         database_url=database_url,
         log_path=Path(os.getenv("LOG_PATH") or "var/logs/dashulya.log"),
         bot_timezone=bot_timezone,
+        exa_api_key=os.getenv("EXA_API_KEY", "").strip(),
         healthcheck_path=Path(value)
         if (value := os.getenv("HEALTHCHECK_PATH"))
         else None,
