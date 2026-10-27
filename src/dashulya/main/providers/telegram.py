@@ -7,7 +7,7 @@ from dishka.integrations.aiogram import AiogramMiddlewareData, setup_dishka
 from dishka_ag2 import AG2Scope
 
 from dashulya.bot.images import TelegramImages
-from dashulya.bot.middlewares.access import OwnerOnlyMiddleware
+from dashulya.bot.middlewares.access import AccessMiddleware
 from dashulya.bot.middlewares.group_tracking import TrackGroupsMiddleware
 from dashulya.bot.middlewares.memory import (
     CaptureMessagesMiddleware,
@@ -58,15 +58,17 @@ class TelegramProvider(Provider):
             yield bot
 
     @provide
-    def access(self, settings: Settings) -> OwnerOnlyMiddleware:
-        return OwnerOnlyMiddleware(settings.owner_user_id)
+    def access(self, settings: Settings) -> AccessMiddleware:
+        return AccessMiddleware(
+            settings.owner_user_id, public_group_ids=settings.public_group_ids
+        )
 
     @provide
     def dispatcher(
         self,
         container: AsyncContainer,
         tracking: TrackGroupsMiddleware,
-        access: OwnerOnlyMiddleware,
+        access: AccessMiddleware,
         capture: CaptureMessagesMiddleware,
         capture_sent: CaptureSentMessagesMiddleware,
         bot: Bot,

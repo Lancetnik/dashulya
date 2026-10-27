@@ -43,7 +43,9 @@ ANIMATION: dict[str, Any] = {
 }
 
 
-class AIHandlerTests(PostgresTestCase):
+class _AIHandlerFixture(PostgresTestCase):
+    public_group_ids: tuple[int, ...] = ()
+
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
         self.directory = TemporaryDirectory()
@@ -73,6 +75,7 @@ class AIHandlerTests(PostgresTestCase):
                 bot_token=BOT_TOKEN,
                 openai_api_key=TEST_API_KEY,
                 owner_user_id=USER["id"],
+                public_group_ids=self.public_group_ids,
             ),
             BotOverride(self.bot),
             RecorderOverride(),
@@ -155,6 +158,8 @@ class AIHandlerTests(PostgresTestCase):
             if isinstance(call.args[1], SendRichMessage)
         ]
 
+
+class AIHandlerTests(_AIHandlerFixture):
     async def test_private_text_invokes_dialogue_and_replies_as_plain_text(self) -> None:
         await self.message("Hi")
         self.dialogue.reply.assert_awaited_once_with(
@@ -756,3 +761,90 @@ class AIHandlerTests(PostgresTestCase):
             self.dialogue.reply.call_args.kwargs["images"],
             (ImageOmission(self.update_id, "decode_failed"),),
         )
+
+
+class PublicGroupHandlerTests(_AIHandlerFixture):
+    public_group_ids = (-123,)
+
+    async def test_other_participant_can_mention_bot_with_their_own_identity(
+        self,
+    ) -> None:
+        await self.message(
+            "@dashulya_bot hello",
+            chat=GROUP,
+            sender={**USER, "id": 99, "first_name": "Boris"},
+            entities=[{"type": "mention", "offset": 0, "length": 13}],
+        )
+        self.dialogue.reply.assert_awaited_once()
+        self.assertEqual(self.dialogue.reply.call_args.args[0], (-123, None))
+        self.assertEqual(self.dialogue.reply.call_args.kwargs["user_id"], 99)
+        self.assertEqual(self.dialogue.reply.call_args.kwargs["user_name"], "Boris")
+        self.decision_agent.ask.assert_not_awaited()
+        self.assertEqual(self.replies()[-1].chat_id, -123)
+
+    async def test_other_participant_can_reply_to_bot(self) -> None:
+        await self.message(
+            "Follow-up",
+            chat=GROUP,
+            sender={**USER, "id": 99},
+            reply_to_message={
+                "message_id": 100,
+                "date": 1700000000,
+                "chat": GROUP,
+                "from": BOT_USER,
+                "text": "Answer",
+            },
+        )
+        self.dialogue.reply.assert_awaited_once()
+        self.decision_agent.ask.assert_not_awaited()
+
+    async def test_name_addressing_still_uses_decision_and_passive_chatter_stays_silent(
+        self,
+    ) -> None:
+        await self.message("Group chatter", chat=GROUP, sender={**USER, "id": 99})
+        self.dialogue.reply.assert_not_awaited()
+        self.decision_agent.ask.assert_not_awaited()
+        await self.message("Дашуль, помоги", chat=GROUP, sender={**USER, "id": 99})
+        self.decision_agent.ask.assert_awaited_once()
+        self.dialogue.reply.assert_not_awaited()
+        self.decision_agent.ask.return_value.content.return_value = True
+        await self.message("Дашуль, помоги", chat=GROUP, sender={**USER, "id": 99})
+        self.dialogue.reply.assert_awaited_once()
+
+    async def test_other_private_chats_groups_and_bot_senders_remain_blocked(
+        self,
+    ) -> None:
+        for chat, sender in (
+            ({**PRIVATE, "id": 99}, {**USER, "id": 99}),
+            ({**GROUP, "id": -456}, {**USER, "id": 99}),
+            (GROUP, {**USER, "id": 99, "is_bot": True}),
+        ):
+            await self.message(
+                "@dashulya_bot hello",
+                chat=chat,
+                sender=sender,
+                entities=[{"type": "mention", "offset": 0, "length": 13}],
+            )
+        await self.message("@dashulya_bot hello", chat=GROUP, **{"from": None})
+        self.dialogue.reply.assert_not_awaited()
+        self.decision_agent.ask.assert_not_awaited()
+        self.requests.assert_not_awaited()
+
+    async def test_group_participants_do_not_gain_owner_commands(self) -> None:
+        for text in (
+            "/start",
+            "/help",
+            "/groups",
+            "/groups@dashulya_bot",
+            " /groups",
+            "/clear",
+        ):
+            await self.message(text, chat=GROUP, sender={**USER, "id": 99})
+        await self.message(
+            chat=GROUP, sender={**USER, "id": 99}, photo=PHOTO, caption="/groups"
+        )
+        self.requests.assert_not_awaited()
+        self.dialogue.reply.assert_not_awaited()
+        self.dialogue.clear.assert_not_awaited()
+        await self.message("/help", chat=GROUP)
+        self.assertIn("/groups", self.replies()[-1].text)

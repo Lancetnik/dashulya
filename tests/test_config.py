@@ -10,6 +10,28 @@ BOT_TOKEN = "123456789:TEST_ONLY_NOT_A_REAL_BOT_TOKEN"
 
 class SettingsTests(unittest.TestCase):
     @patch("dashulya.main.config.load_dotenv")
+    def test_public_group_ids_are_explicit_negative_ids(
+        self, mock_load_dotenv: unittest.mock.MagicMock
+    ) -> None:
+        env = {
+            "BOT_TOKEN": BOT_TOKEN,
+            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Synthetic test credential.
+            "OWNER_USER_ID": "42",
+            "DATABASE_URL": "postgresql://localhost/dashulya",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(load_settings().public_group_ids, ())
+            os.environ["PUBLIC_GROUP_IDS"] = " -100200, -300, -100200 "
+            self.assertEqual(load_settings().public_group_ids, (-100200, -300))
+            for invalid in ("0", "42", "-100200,42", "@chat", "1.5", "-100200,invalid"):
+                os.environ["PUBLIC_GROUP_IDS"] = invalid
+                with (
+                    self.subTest(invalid=invalid),
+                    self.assertRaisesRegex(ValueError, "PUBLIC_GROUP_IDS"),
+                ):
+                    load_settings()
+
+    @patch("dashulya.main.config.load_dotenv")
     def test_explicit_owner_author_ids_do_not_change_access_identity(
         self, mock_load_dotenv: unittest.mock.MagicMock
     ) -> None:

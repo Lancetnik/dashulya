@@ -1,7 +1,7 @@
 from aiogram import Router
 
 from dashulya.bot.handlers import commands, dialogue, groups
-from dashulya.bot.middlewares.access import OwnerOnlyMiddleware
+from dashulya.bot.middlewares.access import AccessMiddleware
 from dashulya.bot.middlewares.group_tracking import TrackGroupsMiddleware
 from dashulya.bot.middlewares.memory import CaptureMessagesMiddleware
 
@@ -9,7 +9,7 @@ from dashulya.bot.middlewares.memory import CaptureMessagesMiddleware
 def create_router(
     *,
     tracking: TrackGroupsMiddleware,
-    access: OwnerOnlyMiddleware,
+    access: AccessMiddleware,
     capture: CaptureMessagesMiddleware,
 ) -> Router:
     router = Router(name=__name__)

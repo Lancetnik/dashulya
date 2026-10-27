@@ -29,6 +29,7 @@ class Settings:
     bot_timezone: str = "Europe/Moscow"
     healthcheck_path: Path | None = None
     owner_author_ids: tuple[int, ...] = ()
+    public_group_ids: tuple[int, ...] = ()
 
 
 def _author_ids(value: str) -> tuple[int, ...]:
@@ -42,6 +43,21 @@ def _author_ids(value: str) -> tuple[int, ...]:
     except ValueError:
         raise ValueError(error_message) from None
     if 0 in result:
+        raise ValueError(error_message)
+    return result
+
+
+def _public_group_ids(value: str) -> tuple[int, ...]:
+    error_message = (
+        "PUBLIC_GROUP_IDS must contain negative numeric group IDs separated by commas."
+    )
+    try:
+        result = tuple(
+            dict.fromkeys(int(part.strip()) for part in value.split(",") if part.strip())
+        )
+    except ValueError:
+        raise ValueError(error_message) from None
+    if any(chat_id >= 0 for chat_id in result):
         raise ValueError(error_message)
     return result
 
@@ -98,6 +114,7 @@ def load_settings() -> Settings:
         openai_api_key=api_key,
         owner_user_id=owner_user_id,
         owner_author_ids=_author_ids(os.getenv("OWNER_AUTHOR_IDS", "")),
+        public_group_ids=_public_group_ids(os.getenv("PUBLIC_GROUP_IDS", "")),
         openai_model=os.getenv("OPENAI_MODEL", "").strip() or "gpt-6-luna",
         openai_decision_model=os.getenv("OPENAI_DECISION_MODEL", "").strip()
         or "gpt-6-luna",

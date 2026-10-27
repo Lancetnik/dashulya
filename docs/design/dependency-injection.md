@@ -74,6 +74,11 @@ Incoming/outgoing capture share conversion in `bot/messages.py`. Group messages
 from all participants, owner-private messages and successful deliveries use
 actual Telegram IDs; other private senders are excluded. `TelegramProvider`
 attaches outgoing capture to the shared bot session.
+It supplies `AccessMiddleware` with the owner ID and explicit `PUBLIC_GROUP_IDS`.
+Private messages and commands stay owner-only. Human participants in those
+groups may proceed to normal addressing; bot/missing senders and unauthorized
+chats remain silent. Capture and group tracking still precede this gate. The
+allowlist grants dialogue access only and does not expand memory authority.
 
 AI factories accept ordinary arguments; tools declare injected dependencies
 with `FromDishka` and the AG2 integration's `@inject`. Model choices, timeouts,

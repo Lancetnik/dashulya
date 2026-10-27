@@ -1,8 +1,9 @@
 # Working on Dashulya
 
-Dashulya is a Telegram assistant for group conversations, currently available
-to one configured owner. Use English for bot messages. Preserve imported
-message text in its original language.
+Dashulya is a Telegram assistant for group conversations. Private access and
+commands belong to one configured owner; explicitly configured groups allow
+all human participants to address her. Use English for bot messages. Preserve
+imported message text in its original language.
 
 ## Setup and checks
 
@@ -48,10 +49,12 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
 
 ## Behavior to preserve
 
-- **Access:** authorize the actual sender's numeric `from_user.id` against
-  `OWNER_USER_ID`. Other users, bot senders, and messages without a sender are
-  silently ignored before command execution or reply/addressing model invocation.
-  Forwarded identities and `/start` do not grant access.
+- **Access:** private messages and commands require the actual sender's numeric
+  `from_user.id` to match `OWNER_USER_ID`. Other human participants may invoke
+  group dialogue only in `PUBLIC_GROUP_IDS`; existing addressing rules still
+  apply. The owner retains access elsewhere. Bot senders, missing senders and
+  unauthorized users are silently ignored before command execution or model
+  invocation. Forwarded identities and `/start` do not grant access.
 - **Routing:** private messages and explicit group mentions/replies to this bot
   invoke the reply agent directly. Group messages naming Dashulya, including
   “Дашуль” in any letter case, first pass an

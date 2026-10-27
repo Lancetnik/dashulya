@@ -7,7 +7,7 @@
     Спрашивай, котик💋
   </p>
   <p>
-    <sub>Also <a href="https://t.me/dashulyai_bot">@dashulyai_bot</a> · A Telegram assistant with memory and a sense of humor · Owner-only prototype</sub>
+    <sub>Also <a href="https://t.me/dashulyai_bot">@dashulyai_bot</a> · A Telegram assistant with memory and a sense of humor</sub>
   </p>
 </div>
 
@@ -78,9 +78,12 @@ records the storage decision.
 | `/groups` | List the groups she knows about |
 | `/clear` | Reset the current private conversation |
 
-The current build responds only to the user configured as its owner. Private
-messages, an explicit @mention of the bot, and replies to its messages start an
-AI conversation directly. Group commands remain available to the owner.
+Private conversations and commands are available only to the configured owner.
+In groups listed in `PUBLIC_GROUP_IDS`, all human participants may address the
+bot; other groups retain owner-only access. Use comma-separated negative numeric
+group IDs; the default empty list keeps dialogue owner-only everywhere.
+Private messages, an explicit @mention of the bot, and replies to its messages
+start an AI conversation directly. Commands remain owner-only in enabled groups.
 
 In groups, messages containing “Dashulya”, “Дашуля” or “Дашуль” in any letter case
 (including Russian case endings) first go through a separate AG2 decision agent using
@@ -142,7 +145,7 @@ known-group registry, saved originals and embedding cache persist between restar
 The agent chooses memory/history tools when a request needs earlier evidence;
 there is no automatic search before every reply.
 
-Pictures are downloaded into RAM only after owner authorization and group addressing.
+Pictures are downloaded into RAM only after sender authorization and group addressing.
 The original photo or image-file bytes go directly to the reply model through AG2's
 native image input; no separate description model or image files are created.
 The combined image limit is 20 MB (20,000,000 bytes), checked before download and
