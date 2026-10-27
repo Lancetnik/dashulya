@@ -171,7 +171,7 @@ class MemoryAccessIntegrationTests(PostgresTestCase):
         self.assertNotIn("Private secret", rendered)
         self.assertEqual([kind for kind, _ in self.service.bound], ["recall", "history"])
         self.assertTrue(all(bound is access for _, bound in self.service.bound))
-        self.assertEqual(len(config.calls[0].tools), 2)
+        self.assertEqual(len(config.calls[0].tools), 3)
         schemas = repr(config.calls[0].tools)
         for name in (
             "is_private",

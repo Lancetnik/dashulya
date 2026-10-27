@@ -13,9 +13,11 @@ from dashulya.bot.middlewares.memory import (
     CaptureMessagesMiddleware,
     CaptureSentMessagesMiddleware,
 )
+from dashulya.bot.reactions import TelegramReactions
 from dashulya.bot.replies import ReplyDelivery
 from dashulya.bot.router import create_router
 from dashulya.domain.memory import MessageRecorder
+from dashulya.domain.reactions import MessageReactions
 from dashulya.main.config import IMAGE_MAX_BYTES, Settings
 
 
@@ -45,6 +47,10 @@ class TelegramProvider(Provider):
     @provide
     def images(self, bot: Bot) -> TelegramImages:
         return TelegramImages(bot, max_bytes=IMAGE_MAX_BYTES)
+
+    @provide
+    def reactions(self, bot: Bot) -> MessageReactions:
+        return TelegramReactions(bot)
 
     @provide
     async def bot(self, settings: Settings) -> AsyncIterator[Bot]:

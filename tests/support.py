@@ -21,8 +21,14 @@ from dashulya.domain.memory import (
 )
 
 
-def reply_json(text: str, reply_to_message_id: int | None = None) -> str:
-    return json.dumps({"text": text, "reply_to_message_id": reply_to_message_id})
+def reply_json(
+    text: str, reply_to_message_id: int | None = None, *, reaction: str | None = None
+) -> str:
+    return json.dumps({
+        "text": text,
+        "reply_to_message_id": reply_to_message_id,
+        "reaction": reaction,
+    })
 
 
 def group_rows(text: str) -> list[list[Any]]:

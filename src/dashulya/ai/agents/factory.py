@@ -50,7 +50,7 @@ def create_reply_agent(
         config=config,
         response_schema=ResponseSchema(
             Reply,
-            description="Reply text and an optional Telegram message ID from the current reply context.",
+            description="Reply text with an optional target message ID, or one emoji reaction to the current request.",
         ),
         middleware=middleware,
     )

@@ -115,6 +115,22 @@ The agent returns structured reply text and an optional target message ID. It
 can reply to another message in the supplied group context; null or an ID outside
 that selection defaults to the triggering message. Every chunk uses the same
 target. Only the reply text is sent to Telegram.
+The structured response also has nullable `reaction`. An empty `text` and one
+reaction emoji acknowledge the current incoming message without a text reply;
+`reply_to_message_id` does not retarget this reaction. Nonempty text takes
+precedence if a response includes both forms.
+
+The reply agent also has `set_reaction(message_id, emoji)`. It can react to any
+message ID in the current chat, including messages outside the selected reply
+context, and can react to several messages or combine reactions with a text reply.
+The chat ID comes exclusively from the application's AG2 Context Variable;
+the model cannot choose another chat. A successful tool-only turn may finish
+without another message. Telegram enforces available emoji and chat permissions.
+Explicit rejection of a final reaction produces a safe text explanation;
+ambiguous delivery is not retried or followed by fallback text. Tool results
+report `sent`, `rejected` or `unknown`; unknown delivery blocks further attempts
+on that message for the remainder of the turn. Access and addressing rules
+apply before either reaction path can run.
 Requests to answer or greet another participant direct the agent to choose that
 participant's relevant message as the reply target, including channel-authored
 messages identified by the requester. Target-selection logs retain the requested

@@ -142,7 +142,8 @@ class DependencyTests(PostgresTestCase):
         async with container() as event:
             self.assertIs(await event.get(ChatMemoryService), memory)
         self.assertEqual(
-            [tool.name for tool in reply.tools], ["search_memory", "chat_history"]
+            [tool.name for tool in reply.tools],
+            ["search_memory", "chat_history", "set_reaction"],
         )
         self.assertEqual(await (await reply.ask("Hello")).content(), Reply("Hello"))
         self.assertTrue(await (await decision.ask("Addressed?")).content())

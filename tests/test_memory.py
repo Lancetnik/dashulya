@@ -279,4 +279,4 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
         self.assertIn("https://t.me/test_chat/2", str(results[0].result))
         self.assertEqual(results[0].name, "search_memory")
-        self.assertEqual(len(config.calls[0].tools), 2)
+        self.assertEqual(len(config.calls[0].tools), 3)

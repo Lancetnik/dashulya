@@ -121,7 +121,8 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(output_format["type"], "json_schema")
             self.assertTrue(output_format["strict"])
             self.assertEqual(
-                output_format["schema"]["required"], ["text", "reply_to_message_id"]
+                output_format["schema"]["required"],
+                ["text", "reply_to_message_id", "reaction"],
             )
             self.assertFalse(output_format["schema"]["additionalProperties"])
             messages = [entry for entry in request["input"] if entry["role"] != "system"]

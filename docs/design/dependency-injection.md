@@ -73,10 +73,23 @@ Providers adapt validated application settings to those inputs, attach DI
 middleware, and supply dependencies. `OPENAI_MODEL` selects the reply model;
 `OPENAI_DECISION_MODEL` selects the addressing model.
 
-The reply agent has an AG2 `ResponseSchema[Reply]` for `text` and nullable
-`reply_to_message_id`. `Dialogue` validates the parsed target against the same
+The reply agent has an AG2 `ResponseSchema[Reply]` for `text`, nullable
+`reply_to_message_id` and nullable `reaction`. `Dialogue` validates the parsed target against the same
 group-context snapshot that seeded the stream; private replies retain the default
 target. The result crosses into `bot` as the domain's `Reply`, with no AG2 objects.
+
+An empty text with a reaction emoji requests a reaction on the triggering message.
+The application-scoped `TelegramReactions` implements the domain's
+`MessageReactions` interface for both final-response delivery and the injected
+`ai/tools/reactions.py` tool. `set_reaction` accepts only message ID and emoji;
+it reads chat identity from the trusted AG2 `chat_id` Context Variable, with no
+model-facing chat override or reply-context target restriction. `Dialogue`
+passes a fresh `ReactionTurn` through AG2 dependencies for every ask. It owns
+per-turn delivery outcomes and serializes parallel reaction calls, allowing a
+successful tool-only turn to finish silently and suppressing retries of any
+unconfirmed target. No mutable chat identity lives on the shared agent or service.
+Telegram errors become fixed result codes and redacted logs; cancellation
+propagates. Reactions create no synthetic delivered text messages in chat history.
 
 When `EXA_API_KEY` is configured, `AgentProvider` also registers the search and
 content-reading subset of AG2 `ExaToolkit`, assembled by `ai/tools/web.py`. The

@@ -22,6 +22,7 @@ from ag2.events import (
 )
 
 from dashulya.ai.group_context import format_group_context
+from dashulya.ai.tools.reactions import ReactionTurn
 from dashulya.domain.memory import (
     ChatHistory,
     ChatMemoryService,
@@ -288,6 +289,8 @@ class Dialogue:
                         reply_to_id=parent_id if isinstance(parent_id, int) else None,
                     ),
                 )
+            elif message_id is not None:
+                message += f"\nTelegram message ID: {message_id}"
             image_inputs = self._image_inputs(
                 images, allowed_reply_ids if group_context is not None else None
             )
@@ -307,23 +310,37 @@ class Dialogue:
                     before_id=message_id,
                 )
                 message = await self._recall_input(text, message, access)
+                reactions = ReactionTurn()
                 reply = await self._agent.ask(
                     message,
                     *image_inputs,
                     stream=stream,
                     variables={"user_id": user_id, "chat_id": key[0]},
-                    dependencies={MemoryAccess: access},
+                    dependencies={MemoryAccess: access, ReactionTurn: reactions},
                 )
                 result = await reply.content()
-            requested_target = result.reply_to_message_id if result is not None else None
-            if result is None or not result.text.strip():
+            if result is not None and not result.text.strip() and result.reaction:
+                if message_id in reactions.uncertain:
+                    validated = Reply("")
+                    target_reason = "reaction_tool_unconfirmed"
+                else:
+                    validated = Reply("", reaction=result.reaction.strip())
+                    target_reason = "reaction_current_request"
+            elif (
+                result is not None
+                and not result.text.strip()
+                and (reactions.delivered or reactions.uncertain)
+            ):
+                validated = Reply("")
+                target_reason = "reaction_tool_completed"
+            elif result is None or not result.text.strip():
                 validated = Reply("I couldn't generate a text reply. Please try again.")
                 target_reason = "empty_reply"
-            elif requested_target is None:
+            elif result.reply_to_message_id is None:
                 validated = Reply(result.text.strip())
                 target_reason = "default_current_request"
-            elif requested_target in allowed_reply_ids:
-                validated = Reply(result.text.strip(), requested_target)
+            elif result.reply_to_message_id in allowed_reply_ids:
+                validated = Reply(result.text.strip(), result.reply_to_message_id)
                 target_reason = "selected"
             else:
                 validated = Reply(result.text.strip())
@@ -334,7 +351,9 @@ class Dialogue:
                     extra={
                         "chat_id": key[0],
                         "message_id": group_context["message_id"],
-                        "requested_reply_to_message_id": requested_target,
+                        "requested_reply_to_message_id": result.reply_to_message_id
+                        if result is not None
+                        else None,
                         "reply_to_message_id": validated.reply_to_message_id
                         or group_context["message_id"],
                         "reply_target_reason": target_reason,

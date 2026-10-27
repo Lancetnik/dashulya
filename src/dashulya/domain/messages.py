@@ -36,6 +36,7 @@ class AddressingDecision:
 class Reply:
     text: str
     reply_to_message_id: int | None = None
+    reaction: str | None = None
 
 
 @dataclass(frozen=True)
