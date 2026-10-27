@@ -136,7 +136,7 @@ same note is supplied while other available text and images remain usable. Downl
 have a 30-second deadline. File signatures determine JPEG, PNG or WebP MIME types;
 Animation frame extraction, video/audio decoding and document parsing are not
 supported by this image path.
-The reply model must support image input; the default `gpt-5.6-luna` does.
+The reply model must support image input.
 Private history keeps recent images within the same 20 MB budget, replacing the
 oldest images with explicit placeholders as needed. Text and replies remain.
 Group images are available only for that request and are not added to searchable

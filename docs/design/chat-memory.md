@@ -109,7 +109,7 @@ discovered while streaming stops the download and produces the same note.
 Native AG2 image inputs and omission notes accompany the question, labelled
 with their source message IDs. Group inputs are restricted
 to the selected reply context. No image bytes or generated descriptions are
-written to the evidence database or indexed in OpenViking. Older group media
+written to the evidence database or indexed in chat memory. Older group media
 remain placeholders. Private images stay only in bounded in-memory history.
 
 The same reply path accepts sticker messages and direct-reply stickers. Static
