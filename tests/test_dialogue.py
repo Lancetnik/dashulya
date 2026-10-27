@@ -6,13 +6,18 @@ from unittest.mock import AsyncMock, patch
 
 from ag2 import Agent, MemoryStream, ResponseSchema
 from ag2.agent import AgentReply
-from ag2.events import ModelRequest, ModelResponse, TextInput
+from ag2.events import BinaryInput, ModelRequest, ModelResponse, TextInput
 from ag2.testing import TestConfig, TrackingConfig
 
 from dashulya.ai.agents.factory import create_reply_agent
 from dashulya.ai.dialogue import Dialogue
 from dashulya.domain.memory import ChatHistory, MemoryMessage
-from dashulya.domain.messages import ConversationKey, Reply
+from dashulya.domain.messages import (
+    ConversationKey,
+    ImageAttachment,
+    ImageOmission,
+    Reply,
+)
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from tests.support import TEST_API_KEY, MemoryOverride, ModelOverrides, reply_json
@@ -454,3 +459,145 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             sent_at=SENT_AT,
         )
         self.assertEqual(result, Reply("Private answer"))
+
+    async def test_private_images_survive_followup_and_oldest_are_evicted_at_budget(
+        self,
+    ) -> None:
+        dialogue = Dialogue(self.agent, max_image_bytes=5)
+        for message_id, data in ((1, b"123"), (2, b"45"), (3, b"678")):
+            await dialogue.reply(
+                (42, None),
+                "Inspect",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                images=(ImageAttachment(data, "image/png", message_id),),
+            )
+        await dialogue.reply(
+            (42, None), "Compare", user_id=42, user_name="Anna", sent_at=SENT_AT
+        )
+        events = list(await self.last_stream().history.get_events())
+        binary = [
+            part
+            for event in events
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+            if isinstance(part, BinaryInput)
+        ]
+        self.assertEqual([part.data for part in binary], [b"45", b"678"])
+        self.assertEqual(
+            [part.vendor_metadata["detail"] for part in binary], ["high", "high"]
+        )
+        self.assertIn(
+            "Earlier image omitted", "\n".join(await self.requests(self.last_stream()))
+        )
+        await dialogue.clear((42, None))
+        self.assertEqual(await dialogue.recent_context((42, None)), [])
+
+    async def test_group_images_are_limited_to_selected_message_ids(self) -> None:
+        self.history.context.return_value = [
+            MemoryMessage(
+                chat_id=-123,
+                message_id=1,
+                text="Photo caption",
+                sent_at=SENT_AT,
+                author_id=99,
+                author="Boris",
+                chat_title="Group",
+                media_type="photo",
+            )
+        ]
+        await self.dialogue.reply(
+            (-123, None),
+            "Inspect",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+            group_context={"message_id": 2},
+            images=(
+                ImageAttachment(b"selected", "image/png", 1),
+                ImageAttachment(b"excluded", "image/png", 999),
+            ),
+        )
+        parts = [
+            part
+            for event in await self.last_stream().history.get_events()
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+        ]
+        self.assertEqual(
+            [part.data for part in parts if isinstance(part, BinaryInput)], [b"selected"]
+        )
+        self.assertIn(
+            "image supplied with the current request",
+            "\n".join(await self.requests(self.last_stream())),
+        )
+
+    async def test_oversized_direct_image_input_never_invokes_model(self) -> None:
+        dialogue = Dialogue(self.agent, max_image_bytes=1)
+        with self.assertRaisesRegex(ValueError, "byte budget"):
+            await dialogue.reply(
+                (42, None),
+                "Inspect",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                images=(ImageAttachment(b"12", "image/png", 1),),
+            )
+        self.ask.assert_not_awaited()
+
+    async def test_omitted_image_is_an_explicit_model_note_with_no_binary_input(
+        self,
+    ) -> None:
+        await self.dialogue.reply(
+            (42, None),
+            "Read this",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+            images=(ImageOmission(1),),
+        )
+        text = "\n".join(await self.requests(self.last_stream()))
+        self.assertIn("Telegram message ID: 1 omitted", text)
+        self.assertIn("too large for the 20 MB", text)
+        self.assertFalse(
+            any(
+                isinstance(part, BinaryInput)
+                for event in await self.last_stream().history.get_events()
+                if isinstance(event, ModelRequest)
+                for part in event.parts
+            )
+        )
+
+    async def test_sticker_preview_and_missing_thumbnail_are_explicit_model_inputs(
+        self,
+    ) -> None:
+        await self.dialogue.reply(
+            (42, None),
+            "What is this sticker?",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+            images=(
+                ImageAttachment(b"preview", "image/webp", 1, preview_kind="sticker"),
+                ImageOmission(2, "preview_unavailable"),
+                ImageAttachment(
+                    b"gif-preview", "image/jpeg", 3, preview_kind="animation"
+                ),
+            ),
+        )
+        text = "\n".join(await self.requests(self.last_stream()))
+        self.assertIn("only a static sticker thumbnail", text)
+        self.assertIn("only a static animation thumbnail", text)
+        self.assertIn("animation and motion are unavailable", text)
+        self.assertIn("Telegram message ID: 2 omitted", text)
+        self.assertIn("Telegram did not provide a thumbnail", text)
+        self.assertNotIn("too large", text)
+        parts = [
+            part
+            for event in await self.last_stream().history.get_events()
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+            if isinstance(part, BinaryInput)
+        ]
+        self.assertEqual([part.data for part in parts], [b"preview", b"gif-preview"])

@@ -71,6 +71,13 @@ target. The result crosses into `bot` as the domain's `Reply`, with no AG2 objec
 `ReplyDelivery` remains in `bot`: it owns Telegram typing, redacted failure
 handling, and rich/text delivery. Only an explicit Telegram rejection permits
 fallback. Domain messages carry no aiogram objects.
+Its application-scoped `TelegramImages` dependency downloads authorized current
+and direct-reply images into bounded RAM, verifies supported signatures and
+returns domain `ImageAttachment` values. The Telegram provider supplies the
+download budget from `main/config.py`; the agent provider supplies the same
+budget to `Dialogue` for bounded private image history. `Dialogue` turns these
+values into AG2 native image inputs and restricts group source IDs to the
+selected reply context. Binary media never enters durable message capture.
 
 ## Shared graph and scopes
 

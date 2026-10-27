@@ -6,6 +6,7 @@ from dishka import AsyncContainer, Provider, from_context, provide
 from dishka.integrations.aiogram import AiogramMiddlewareData, setup_dishka
 from dishka_ag2 import AG2Scope
 
+from dashulya.bot.images import TelegramImages
 from dashulya.bot.middlewares.access import OwnerOnlyMiddleware
 from dashulya.bot.middlewares.group_tracking import TrackGroupsMiddleware
 from dashulya.bot.middlewares.memory import (
@@ -14,7 +15,7 @@ from dashulya.bot.middlewares.memory import (
 )
 from dashulya.bot.replies import ReplyDelivery
 from dashulya.bot.router import create_router
-from dashulya.main.config import Settings
+from dashulya.main.config import IMAGE_MAX_BYTES, Settings
 
 
 class TelegramProvider(Provider):
@@ -27,6 +28,10 @@ class TelegramProvider(Provider):
     # AiogramProvider uses Scope.REQUEST; both integrations share AG2Scope here.
     event = from_context(TelegramObject, scope=AG2Scope.REQUEST)
     middleware_data = from_context(AiogramMiddlewareData, scope=AG2Scope.REQUEST)
+
+    @provide
+    def images(self, bot: Bot) -> TelegramImages:
+        return TelegramImages(bot, max_bytes=IMAGE_MAX_BYTES)
 
     @provide
     async def bot(self, settings: Settings) -> AsyncIterator[Bot]:

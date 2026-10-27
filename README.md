@@ -33,6 +33,10 @@ and [Ostrikov's chat](https://t.me/aostrikov_agents_chat)
 
 - **Talk in private.** Keep the current conversation in context, with a fresh
   start whenever you send `/clear`.
+- **Understand pictures.** Send a photo or a JPEG, PNG or WebP file, with an
+  optional question in its caption, or reply to a picture with your question.
+- **Understand stickers.** Static stickers use their original image; animated
+  and video stickers use Telegram's static thumbnail, with motion unavailable.
 - **Find earlier discussions.** Search an imported chat-history snapshot and
   return original messages with Telegram links and surrounding replies.
 - **Remember new group messages.** Save received messages and edits locally,
@@ -89,8 +93,10 @@ Each group reply uses a fresh model stream with the latest 20 observed messages
 in that chat/topic, including the current request, plus their reply parents up
 to five hops. Messages appear once in chronological message order; this bot's
 previously delivered replies use the assistant role. Context reads local originals
-immediately, without waiting for semantic indexing. Missing parents and media
-contents cannot be reconstructed. The selection has at most 120 messages, with
+immediately, without waiting for semantic indexing. Missing parents and earlier media
+contents cannot be reconstructed. The current picture and its directly replied-to
+picture can be supplied as native image inputs when their messages are in this
+selection. The selection has at most 120 messages, with
 no additional token cap. See [the decision](docs/adr/0002-rebuild-group-reply-context.md).
 
 The agent returns structured reply text and an optional target message ID. It
@@ -104,6 +110,41 @@ ID, effective ID, selection reason and available context IDs; they omit reply te
 
 Private conversation history lasts until a bot restart or `/clear`. The
 known-group registry and group-message journal persist between restarts.
+
+Pictures are downloaded into RAM only after owner authorization and group addressing.
+The original photo or image-file bytes go directly to the reply model through AG2's
+native image input; no separate description model or image files are created.
+The combined image limit is 20 MB (20,000,000 bytes), checked before download and
+while streaming, even when Telegram omits or understates the file size. Downloads
+are skipped when metadata already shows the image will not fit; the agent instead
+receives a source-labelled note that the image is too large. If an unknown or
+understated size exceeds the limit during streaming, the stream stops and the
+same note is supplied while other available text and images remain usable. Downloads
+have a 30-second deadline. File signatures determine JPEG, PNG or WebP MIME types;
+Animation frame extraction, video/audio decoding and document parsing are not
+supported by this image path.
+The reply model must support image input; the default `gpt-5.6-luna` does.
+Private history keeps recent images within the same 20 MB budget, replacing the
+oldest images with explicit placeholders as needed. Text and replies remain.
+Group images are available only for that request and are not added to searchable
+chat memory. Group captions follow the same mention/name/reply rules as text.
+
+Sticker messages follow the same access and addressing rules, including a sticker
+sent in reply to the bot and a question replying to another participant's sticker.
+Regular, mask and custom-emoji sticker objects use the same format handling:
+static stickers supply their image bytes, while animated TGS and video WEBM
+stickers supply only the JPEG/WebP thumbnail provided by Telegram. The agent is
+explicitly told when it sees a thumbnail and must not infer animation or motion.
+Missing thumbnails produce an unavailable-image note without downloading the
+animation. Stickers and previews share the image byte budget and RAM-only path.
+Inline custom emoji inside text are not fetched as separate sticker images.
+
+GIF and silent MP4 messages delivered as Telegram animations use their static
+thumbnail through the same path, including captions and direct-reply questions.
+GIF files sent as documents use their thumbnail when Telegram provides one.
+The original animation is not downloaded; missing or oversized previews produce
+an omission note for the agent. Preview inputs are labelled as animations with
+motion unavailable and share the existing 20 MB budget.
 
 Formatted replies use Telegram Rich Messages for Markdown emphasis, source
 links, headings, lists, tables, quotes, code, and collapsible `<details>` sections.
@@ -203,8 +244,9 @@ an administrator, or
 through @BotFather and re-add the bot. Telegram does not deliver other bots'
 messages to it. All received group participants' messages are indexed; replies and commands
 remain restricted to the owner. Private conversations are not added to chat
-memory. Text, captions and basic attachment metadata are retained; attachment
-contents are not downloaded. Coverage and provenance belong to each local
+memory. Text, captions and basic attachment metadata are retained; passive capture
+does not download attachment contents. Authorized picture requests use the RAM-only
+image path described above. Coverage and provenance belong to each local
 dataset under `evals/datasets/`. The [memory ADR](docs/adr/0001-openviking-memory.md)
 records the pilot's decision and limitations.
 

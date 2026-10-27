@@ -11,7 +11,7 @@ from dashulya.ai.dialogue import Dialogue
 from dashulya.ai.tools.memory import search_memory
 from dashulya.domain.memory import ChatHistory, MemoryBackend
 from dashulya.domain.messages import Reply
-from dashulya.main.config import Settings
+from dashulya.main.config import IMAGE_MAX_BYTES, Settings
 
 
 class AgentProvider(Provider):
@@ -52,7 +52,11 @@ class AgentProvider(Provider):
         self, agent: Agent[Reply], settings: Settings, history: ChatHistory, bot: Bot
     ) -> Dialogue:
         return Dialogue(
-            agent, timezone=settings.bot_timezone, history=history, bot_id=bot.id
+            agent,
+            timezone=settings.bot_timezone,
+            history=history,
+            bot_id=bot.id,
+            max_image_bytes=IMAGE_MAX_BYTES,
         )
 
     @provide
