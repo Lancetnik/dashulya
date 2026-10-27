@@ -2,9 +2,11 @@ from collections.abc import Iterable
 
 from ag2 import Agent, ResponseSchema
 from ag2.config import ModelConfig
+from ag2.middleware import Middleware
 from ag2.middleware.base import MiddlewareFactory
 from ag2.tools.tool import Tool
 
+from dashulya.ai.agents.tracing import ReplyTrace
 from dashulya.ai.prompts import (
     CHARACTER_PROMPT,
     GROUP_ADDRESSING_PROMPT,
@@ -52,5 +54,5 @@ def create_reply_agent(
             Reply,
             description="Reply text with an optional target message ID, or one emoji reaction to the current request.",
         ),
-        middleware=middleware,
+        middleware=[Middleware(ReplyTrace), *middleware],
     )

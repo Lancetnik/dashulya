@@ -45,7 +45,8 @@ containers =
     dashulya.ai
 layers =
     agents | dialogue | addressing | embeddings
-    tools | group_context
+    tools
+    message_format
     prompts
 exhaustive = True
 
@@ -75,7 +76,7 @@ layers =
     reactions
     images
     messages
-    formatting
+    formatting | media_frames | chat_actions
 exhaustive = True
 
 [importlinter:contract:independent-domain]

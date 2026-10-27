@@ -8,6 +8,7 @@ from dashulya.ai.addressing import GroupAddressing
 from dashulya.ai.agents.factory import create_decision_agent, create_reply_agent
 from dashulya.ai.agents.models import AgentModels, create_models
 from dashulya.ai.dialogue import Dialogue
+from dashulya.ai.message_format import MessageFormatter
 from dashulya.ai.tools.history import chat_history
 from dashulya.ai.tools.memory import search_memory
 from dashulya.ai.tools.reactions import set_reaction
@@ -25,6 +26,14 @@ from dashulya.main.config import IMAGE_MAX_BYTES, Settings
 
 class AgentProvider(Provider):
     scope = AG2Scope.APP
+
+    @provide
+    def message_formatter(self, settings: Settings, bot: Bot) -> MessageFormatter:
+        return MessageFormatter(
+            settings.bot_timezone,
+            bot.id,
+            author_users=dict.fromkeys(settings.owner_author_ids, settings.owner_user_id),
+        )
 
     @provide
     def models(self, settings: Settings) -> AgentModels:
@@ -94,18 +103,14 @@ class AgentProvider(Provider):
     def dialogue(
         self,
         agent: Agent[Reply],
-        settings: Settings,
         history: ChatHistory,
-        bot: Bot,
-        memory: ChatMemoryService,
+        formatter: MessageFormatter,
     ) -> Dialogue:
         return Dialogue(
             agent,
-            timezone=settings.bot_timezone,
             history=history,
-            bot_id=bot.id,
-            memory=memory,
             max_image_bytes=IMAGE_MAX_BYTES,
+            formatter=formatter,
         )
 
     @provide

@@ -11,7 +11,7 @@ from ag2.testing import TestConfig, TrackingConfig
 
 from dashulya.ai.agents.factory import create_reply_agent
 from dashulya.ai.dialogue import Dialogue
-from dashulya.domain.memory import ChatHistory, MemoryMessage, ReplyContext
+from dashulya.domain.memory import ChatHistory, MemoryBackend, MemoryMessage, ReplyContext
 from dashulya.domain.messages import (
     ConversationKey,
     ImageAttachment,
@@ -40,10 +40,12 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             owner_user_id=42,
         )
         self.history = AsyncMock(spec=ChatHistory)
+        self.memory = AsyncMock(spec=MemoryBackend)
+        self.memory.search.return_value = {"coverage": {}, "hits": []}
         self.history.context.return_value = ReplyContext()
         self.container = create_container(
             self.settings,
-            MemoryOverride(history=self.history),
+            MemoryOverride(self.memory, history=self.history),
             ModelOverrides(reply=self.config, decision=TestConfig("false")),
         )
         self.addAsyncCleanup(self.container.close)
@@ -93,12 +95,18 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 2)
         self.assertIn("Remember Anna", requests[0])
         self.assertIn("Who am I?", requests[1])
-        self.assertIn("Anna (Telegram user ID: 42)", requests[0])
+        self.assertIn("Anna (Telegram user ID: 42; interlocutor)", requests[0])
         self.assertEqual(self.config.calls[-1].variables, {"user_id": 42, "chat_id": 42})
         responses = [
             e for e in await stream.history.get_events() if isinstance(e, ModelResponse)
         ]
         self.assertEqual([e.content for e in responses], [reply_json("AI answer")] * 2)
+
+    async def test_casual_reply_does_not_search_memory_automatically(self) -> None:
+        await self.reply((42, None), "Hello")
+        self.memory.search.assert_not_awaited()
+        requests = await self.requests(self.last_stream())
+        self.assertNotIn("Initial recall", requests[0])
 
     async def test_each_message_keeps_its_send_time_in_ag2_history(self) -> None:
         first = datetime(2026, 10, 24, 20, 59, tzinfo=UTC)
@@ -106,15 +114,11 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         await self.reply((42, None), "Yesterday", sent_at=first)
         await self.reply((42, None), "Today", sent_at=second)
         requests = await self.requests(self.last_stream())
-        self.assertTrue(all("Initial recall:" in request for request in requests))
         self.assertEqual(
+            requests,
             [
-                request.split("\n\nCurrent request (original):\n", 1)[1]
-                for request in requests
-            ],
-            [
-                "Sent at: 24 October 2026 (Saturday) 23:59:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42):\nYesterday",
-                "Sent at: 25 October 2026 (Sunday) 03:05:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42):\nToday",
+                "Sent at: 24 October 2026 (Saturday) 23:59:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42; interlocutor):\nYesterday",
+                "Sent at: 25 October 2026 (Sunday) 03:05:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42; interlocutor):\nToday",
             ],
         )
 
@@ -197,12 +201,9 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         await self.reply((42, None), "Fresh")
         fresh = self.last_stream()
         self.assertEqual(
+            await self.requests(fresh),
             [
-                request.split("\n\nCurrent request (original):\n", 1)[1]
-                for request in await self.requests(fresh)
-            ],
-            [
-                "Sent at: 25 October 2026 (Sunday) 15:00:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42):\nFresh"
+                "Sent at: 25 October 2026 (Sunday) 15:00:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42; interlocutor):\nFresh"
             ],
         )
 
@@ -616,3 +617,36 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             if isinstance(part, BinaryInput)
         ]
         self.assertEqual([part.data for part in parts], [b"preview", b"gif-preview"])
+
+    async def test_animation_reaches_model_as_only_its_first_frame(
+        self,
+    ) -> None:
+        await self.dialogue.reply(
+            (42, None),
+            "Please respond to this media in the context of our conversation.",
+            user_id=42,
+            user_name="Anna",
+            sent_at=SENT_AT,
+            images=(
+                ImageAttachment(
+                    b"first", "image/jpeg", 1, preview_kind="animation", first_frame=True
+                ),
+                ImageOmission(2, "decode_failed"),
+            ),
+        )
+        events = await self.last_stream().history.get_events()
+        parts = [
+            part
+            for event in events
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+        ]
+        text = "\n".join(part.content for part in parts if isinstance(part, TextInput))
+        self.assertIn("only the first frame from the original animation", text)
+        self.assertIn("Later frames and motion are unavailable", text)
+        self.assertNotIn("thumbnail", text.split("original animation.")[0])
+        self.assertIn("original animation could not be decoded", text)
+        self.assertEqual(
+            [part.data for part in parts if isinstance(part, BinaryInput)],
+            [b"first"],
+        )

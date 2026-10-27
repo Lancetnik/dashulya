@@ -10,7 +10,7 @@ from ag2 import Agent, MemoryStream
 from ag2.events import ModelRequest, ModelResponse, TextInput
 from ag2.testing import TestConfig
 from aiogram import Bot, Dispatcher
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.methods import SendMessage, SendRichMessage, TelegramMethod
 from aiogram.types import Message, Update, User
 
@@ -297,7 +297,7 @@ class GroupContextTests(PostgresTestCase):
         self.assertEqual(saved[2].author_id, BOT["id"])
         self.assertEqual((await self.store.coverage())["indexed_count"], 0)
 
-    async def test_rich_reply_records_markdown_with_actual_id(self) -> None:
+    async def test_formatted_reply_records_delivered_text_with_actual_id(self) -> None:
         self.ask.return_value = SimpleNamespace(
             content=AsyncMock(return_value=Reply("**Hello**"))
         )
@@ -318,7 +318,16 @@ class GroupContextTests(PostgresTestCase):
             )
         ).messages
         self.assertEqual(saved[-1].message_id, self.sent[-1].message_id)
-        self.assertEqual(saved[-1].text, "**Hello**")
+        self.assertEqual(saved[-1].text, "Hello")
+        delivered = [
+            call.args[1]
+            for call in self.requests.call_args_list
+            if isinstance(call.args[1], SendMessage)
+        ]
+        self.assertEqual(delivered[-1].text, saved[-1].text)
+        self.assertEqual(
+            [entity.type for entity in delivered[-1].entities or []], ["bold"]
+        )
         self.assertEqual(saved[-1].reply_to_id, 1)
 
     async def test_ambiguous_send_failure_does_not_record_or_retry(self) -> None:
@@ -353,32 +362,23 @@ class GroupContextTests(PostgresTestCase):
         ]
         self.assertEqual(len(sends), 1)
 
-    async def test_rejected_rich_reply_records_only_successful_text_chunks(self) -> None:
+    async def test_entity_reply_records_only_the_delivered_message(self) -> None:
         self.ask.return_value = SimpleNamespace(
             content=AsyncMock(return_value=Reply("**Hello**"))
         )
         self.ask.side_effect = None
 
-        async def reject_rich(
-            bot: Bot, method: TelegramMethod[Any], **kwargs: Any
-        ) -> Message | bool:
-            if isinstance(method, SendRichMessage):
-                raise TelegramBadRequest(method, "Rich message rejected")
-            return await self.request(bot, method, **kwargs)
-
-        self.requests.side_effect = reject_rich
-        with self.assertLogs("dashulya.bot.replies", level="WARNING"):
-            await self.feed(
-                "Dashulya",
-                entities=[
-                    {
-                        "type": "text_mention",
-                        "offset": 0,
-                        "length": 8,
-                        "user": BOT,
-                    }
-                ],
-            )
+        await self.feed(
+            "Dashulya",
+            entities=[
+                {
+                    "type": "text_mention",
+                    "offset": 0,
+                    "length": 8,
+                    "user": BOT,
+                }
+            ],
+        )
         saved = (
             await self.store.context(
                 (-100123, None), self.next_id, limit=20, parent_hops=5
@@ -502,39 +502,30 @@ class GroupContextTests(PostgresTestCase):
         self.assertEqual("".join(m.text for m in saved if m.author_id == 123), text)
         self.assertTrue(all(m.reply_to_id == 1 for m in saved if m.author_id == 123))
 
-    async def test_selected_reply_target_survives_rich_rejection(self) -> None:
+    async def test_selected_reply_target_is_preserved_in_entity_delivery(self) -> None:
         await self.feed("The message to answer", owner=False)
         self.ask.return_value = SimpleNamespace(
             content=AsyncMock(return_value=Reply("**Answer**", 1))
         )
         self.ask.side_effect = None
 
-        async def reject_rich(
-            bot: Bot, method: TelegramMethod[Any], **kwargs: Any
-        ) -> Message | bool:
-            if isinstance(method, SendRichMessage):
-                raise TelegramBadRequest(method, "Rich message rejected")
-            return await self.request(bot, method, **kwargs)
-
-        self.requests.side_effect = reject_rich
-        with self.assertLogs("dashulya.bot.replies", level="WARNING"):
-            await self.feed(
-                "Dashulya",
-                entities=[
-                    {
-                        "type": "text_mention",
-                        "offset": 0,
-                        "length": 8,
-                        "user": BOT,
-                    }
-                ],
-            )
+        await self.feed(
+            "Dashulya",
+            entities=[
+                {
+                    "type": "text_mention",
+                    "offset": 0,
+                    "length": 8,
+                    "user": BOT,
+                }
+            ],
+        )
         sends = [
             call.args[1]
             for call in self.requests.call_args_list
             if isinstance(call.args[1], (SendMessage, SendRichMessage))
         ]
-        self.assertEqual(len(sends), 2)
+        self.assertEqual(len(sends), 1)
         for send in sends:
             assert send.reply_parameters is not None
             self.assertEqual(send.reply_parameters.message_id, 1)

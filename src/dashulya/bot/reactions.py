@@ -1,4 +1,5 @@
 import logging
+from time import perf_counter
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError, TelegramServerError
@@ -21,6 +22,12 @@ class TelegramReactions:
             return ReactionResult("rejected", message_id, emoji, "invalid_message_id")
         if not emoji or len(emoji) > 16:
             return ReactionResult("rejected", message_id, emoji, "invalid_emoji")
+        started = perf_counter()
+        context: dict[str, object] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "emoji": emoji,
+        }
         try:
             sent = await self._bot.set_message_reaction(
                 chat_id=chat_id,
@@ -32,8 +39,9 @@ class TelegramReactions:
             logger.warning(
                 "Reaction delivery unconfirmed",
                 extra={
-                    "chat_id": chat_id,
-                    "message_id": message_id,
+                    **context,
+                    "outcome": "unknown",
+                    "duration_ms": round((perf_counter() - started) * 1000),
                     **exception_fields(error),
                 },
             )
@@ -43,8 +51,9 @@ class TelegramReactions:
             logger.warning(
                 "Reaction rejected",
                 extra={
-                    "chat_id": chat_id,
-                    "message_id": message_id,
+                    **context,
+                    "outcome": "rejected",
+                    "duration_ms": round((perf_counter() - started) * 1000),
                     **exception_fields(error),
                 },
             )
@@ -54,10 +63,21 @@ class TelegramReactions:
             logger.warning(
                 "Reaction delivery unconfirmed",
                 extra={
-                    "chat_id": chat_id,
-                    "message_id": message_id,
+                    **context,
+                    "outcome": "unknown",
+                    "duration_ms": round((perf_counter() - started) * 1000),
                     **exception_fields(error),
                 },
             )
             return ReactionResult("unknown", message_id, emoji, "delivery_unconfirmed")
-        return ReactionResult("sent" if sent else "rejected", message_id, emoji)
+        result = ReactionResult("sent" if sent else "rejected", message_id, emoji)
+        logger.log(
+            logging.INFO if sent else logging.WARNING,
+            "Reaction delivered" if sent else "Reaction rejected",
+            extra={
+                **context,
+                "outcome": result.status,
+                "duration_ms": round((perf_counter() - started) * 1000),
+            },
+        )
+        return result

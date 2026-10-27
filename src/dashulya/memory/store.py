@@ -240,18 +240,19 @@ class MessageStore:
                     JOIN selected s USING(message_id) WHERE m.chat_id=%(chat)s
                         AND s.depth=%(hops)s AND m.reply_to_id<m.message_id
                         AND NOT EXISTS(SELECT 1 FROM selected p WHERE p.message_id=m.reply_to_id)
-                ), lineage(boundary_id,collection,message_id,reply_to_id) AS (
-                    SELECT message_id,collection,message_id,reply_to_id FROM boundaries
+                ), lineage(boundary_id,collection,message_id,reply_to_id,hops) AS (
+                    SELECT message_id,collection,message_id,reply_to_id,0 FROM boundaries
                     UNION ALL
-                    SELECT l.boundary_id,p.collection,p.message_id,p.reply_to_id
+                    SELECT l.boundary_id,p.collection,p.message_id,p.reply_to_id,l.hops+1
                     FROM lineage l JOIN messages p
                         ON p.collection=l.collection AND p.message_id=l.reply_to_id
                     WHERE p.message_id<l.message_id AND p.sent_at IS NOT NULL
                         AND (%(topic)s::bigint IS NULL OR p.topic_id=%(topic)s)
                 ), roots AS (
-                    SELECT boundary_id,min(message_id) FILTER(WHERE reply_to_id IS NULL) AS root_id
+                    SELECT boundary_id,min(message_id) FILTER(WHERE reply_to_id IS NULL) AS root_id,
+                        min(hops) FILTER(WHERE reply_to_id IS NULL) AS remaining_hops
                     FROM lineage GROUP BY boundary_id
-                ) SELECT m.*,r.boundary_id IS NOT NULL AS truncated,r.root_id
+                ) SELECT m.*,r.boundary_id IS NOT NULL AS truncated,r.root_id,r.remaining_hops
                 FROM messages m JOIN selected s USING(message_id)
                 LEFT JOIN roots r ON r.boundary_id=m.message_id
                 WHERE m.chat_id=%(chat)s ORDER BY m.message_id""",
@@ -292,6 +293,7 @@ class MessageStore:
                     message_source_id(row["collection"], row["root_id"])
                     if row["root_id"] is not None
                     else None,
+                    row["remaining_hops"],
                 )
                 for row in rows
                 if row["truncated"]

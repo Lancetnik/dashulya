@@ -2,13 +2,14 @@ import asyncio
 import unittest
 from collections.abc import AsyncGenerator
 from typing import Any
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 from aiogram import Bot
 from aiogram.types import File, Message
 
 from dashulya.bot.images import ImageInputError, TelegramImages
 from dashulya.domain.messages import ImageAttachment, ImageOmission
+from tests.media_fixtures import animation_bytes
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"image-data"
 STICKER: dict[str, Any] = {
@@ -286,7 +287,7 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(images[1], ImageOmission(1))
         self.get_file.assert_awaited_once_with("photo")
 
-    async def test_animation_thumbnail_precedes_legacy_document_and_original_size(
+    async def test_oversized_animation_falls_back_to_thumbnail_ignoring_legacy_document(
         self,
     ) -> None:
         for mime in ("image/gif", "video/mp4"):
@@ -312,7 +313,9 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(images[0].preview_kind, "animation")
                 self.get_file.assert_awaited_once_with("thumbnail")
 
-    async def test_animation_without_thumbnail_never_downloads_original(self) -> None:
+    async def test_animation_without_thumbnail_attempts_the_original(self) -> None:
+        self.chunks = [animation_bytes()]
+        self.images = TelegramImages(self.bot, max_bytes=100_000)
         images = await self.images.load(
             image_message(
                 photo=None,
@@ -324,11 +327,15 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
         )
-        self.assertEqual(images, (ImageOmission(1, "preview_unavailable"),))
-        self.get_file.assert_not_awaited()
-        self.stream.assert_not_called()
+        self.get_file.assert_awaited_once_with("animation")
+        self.assertEqual(len(images), 1)
+        assert isinstance(images[0], ImageAttachment)
+        self.assertEqual(images[0].message_id, 1)
+        self.assertTrue(images[0].first_frame)
 
-    async def test_gif_document_uses_preview_or_explicit_missing_note(self) -> None:
+    async def test_undecodable_gif_document_uses_preview_or_explicit_failure_note(
+        self,
+    ) -> None:
         document = {
             "file_id": "gif",
             "file_unique_id": "gif",
@@ -339,15 +346,34 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
         images = await self.images.load(image_message(photo=None, document=document))
         assert isinstance(images[0], ImageAttachment)
         self.assertEqual(images[0].preview_kind, "animation")
-        self.get_file.assert_awaited_once_with("thumbnail")
+        self.assertEqual(self.get_file.await_args_list, [call("gif"), call("thumbnail")])
+        self.assertFalse(images[0].first_frame)
         self.get_file.reset_mock()
         self.assertEqual(
             await self.images.load(
                 image_message(photo=None, document={**document, "thumbnail": None})
             ),
-            (ImageOmission(1, "preview_unavailable"),),
+            (ImageOmission(1, "decode_failed"),),
         )
-        self.get_file.assert_not_awaited()
+        self.get_file.assert_awaited_once_with("gif")
+
+    async def test_gif_document_decodes_original_without_a_thumbnail(self) -> None:
+        self.chunks = [animation_bytes(format="gif")]
+        self.images = TelegramImages(self.bot, max_bytes=100_000)
+        images = await self.images.load(
+            image_message(
+                photo=None,
+                document={
+                    "file_id": "gif",
+                    "file_unique_id": "gif",
+                    "mime_type": "image/gif",
+                },
+            )
+        )
+        self.assertEqual(len(images), 1)
+        assert isinstance(images[0], ImageAttachment)
+        self.assertTrue(images[0].first_frame)
+        self.get_file.assert_awaited_once_with("gif")
 
     async def test_oversized_animation_preview_skips_download(self) -> None:
         images = await self.images.load(
@@ -355,6 +381,7 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
                 photo=None,
                 animation={
                     **ANIMATION,
+                    "file_size": len(PNG) + 1,
                     "thumbnail": {**THUMBNAIL, "file_size": len(PNG) + 1},
                 },
             )
@@ -363,7 +390,9 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
         self.get_file.assert_not_awaited()
         self.stream.assert_not_called()
 
-    async def test_reply_animation_uses_thumbnail_from_same_chat(self) -> None:
+    async def test_reply_animation_uses_first_original_frame_from_same_chat(self) -> None:
+        self.chunks = [animation_bytes()]
+        self.images = TelegramImages(self.bot, max_bytes=100_000)
         parent = image_message(photo=None, animation=ANIMATION).model_dump()
         images = await self.images.load(
             image_message(
@@ -373,7 +402,22 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(images[0], ImageAttachment)
         self.assertEqual(images[0].message_id, 1)
         self.assertEqual(images[0].preview_kind, "animation")
-        self.get_file.assert_awaited_once_with("thumbnail")
+        self.assertTrue(images[0].first_frame)
+        self.get_file.assert_awaited_once_with("animation")
+        self.get_file.reset_mock()
+        for changed in (
+            {"chat": {"id": 43, "type": "private"}},
+            {"message_thread_id": 7},
+        ):
+            self.assertEqual(
+                await self.images.load(
+                    image_message(
+                        photo=None, text="Explain", reply_to_message={**parent, **changed}
+                    )
+                ),
+                (),
+            )
+        self.get_file.assert_not_awaited()
 
     async def test_ordinary_group_reply_threads_share_image_access(self) -> None:
         chat = {"id": -123, "type": "supergroup", "title": "Group"}

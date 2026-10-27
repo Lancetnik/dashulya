@@ -26,7 +26,7 @@ ai/
   tools/memory.py        Bounded recall over the async backend interface
   tools/history.py       Canonical original reads, counts and pagination
   embeddings.py          Embedding provider/model policy
-  group_context.py       Shared roster and calendar formatting for group context
+  message_format.py      Shared roster, calendar and message rows for context/tools
   dialogue.py            Reply context, conversation history, turn locking, and reset
   addressing.py          Direct-address recognition and classification
   prompts.py             Persona and response instructions
@@ -60,7 +60,16 @@ metadata construction/fingerprinting runs in CPU threads. Ranking uses native
 pgvector and SQL BM25, then bounded RRF in Python. Cancelled SQL returns its
 connection safely to the pool.
 
-`AgentProvider` supplies the same store and Telegram bot ID to `Dialogue`.
+`AgentProvider` supplies the same store and an application-scoped `MessageFormatter`
+to `Dialogue` and the memory tools. The formatter receives `BOT_TIMEZONE` and the
+actual Telegram bot ID; it owns no chat authority or mutable conversation state.
+The provider adapts optional `OWNER_AUTHOR_IDS` into explicit sender-to-user
+authorship bindings for the formatter. These affect presentation only, not
+sender authorization or memory access. No binding is inferred from names.
+Each rendering receives the current request's sender ID as an argument to mark
+`interlocutor`. Tools receive the session's context through AG2's `Context` annotation
+and read the `user_id` variable supplied by `Dialogue`; this is hidden from the
+model-facing schema. Per-turn identity never mutates the shared formatter.
 Incoming/outgoing capture share conversion in `bot/messages.py`. Group messages
 from all participants, owner-private messages and successful deliveries use
 actual Telegram IDs; other private senders are excluded. `TelegramProvider`
@@ -72,6 +81,11 @@ retry policy, agent identities, prompts, and response schemas live in `ai`.
 Providers adapt validated application settings to those inputs, attach DI
 middleware, and supply dependencies. `OPENAI_MODEL` selects the reply model;
 `OPENAI_DECISION_MODEL` selects the addressing model.
+The reply-agent factory also attaches `ReplyTrace` middleware for correlated
+model/tool timings, outcomes and token counts. It reads trusted `MemoryAccess`
+from each turn's context and records metadata without arguments, results or
+conversation bodies. `Dialogue` binds tool authority without running an automatic
+recall; the agent chooses which tools to call.
 
 The reply agent has an AG2 `ResponseSchema[Reply]` for `text`, nullable
 `reply_to_message_id` and nullable `reaction`. `Dialogue` validates the parsed target against the same
@@ -100,8 +114,14 @@ failures before they enter AG2 history, and propagates cancellation. The key is
 excluded from settings repr and included in log redaction.
 
 `ReplyDelivery` remains in `bot`: it owns Telegram typing, redacted failure
-handling, and rich/text delivery. Only an explicit Telegram rejection permits
-fallback. Domain messages carry no aiogram objects.
+handling, and entity-based Markdown delivery through the slop-writer renderer.
+It sends ordinary Telegram messages once per chunk. Domain messages carry no
+aiogram objects.
+`bot/chat_actions.py` scopes a best-effort typing task to each reply, cancels and
+joins it on exit, and logs failures without propagating notification errors into
+generation. `TelegramReactions` logs each confirmed delivery and its timing for
+both structured reaction replies and tool calls; rejected or unconfirmed attempts
+remain distinguishable.
 Its application-scoped `TelegramImages` dependency downloads authorized current
 and direct-reply images into bounded RAM, verifies supported signatures and
 returns domain `ImageAttachment` values. The Telegram provider supplies the
@@ -138,7 +158,8 @@ distinguish the reply and addressing roles.
 
 The reply agent always registers `search_memory` and `chat_history` with `@tool`
 and standard `dishka_ag2.inject`. Their `FromDishka[MemoryBackend]` and
-`FromDishka[HistoryReader]` parameters stay outside the model-facing schema.
+`FromDishka[HistoryReader]` and `FromDishka[MessageFormatter]` parameters stay outside
+the model-facing schema.
 `Dialogue.reply()` passes `MemoryAccess` through trusted AG2 dependencies using
 the conversation's numeric chat identity and original request cutoff. The
 session provider validates that authority, then binds both readers in

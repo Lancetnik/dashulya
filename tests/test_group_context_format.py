@@ -2,9 +2,8 @@ import json
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
 
-from dashulya.ai.group_context import format_group_context
+from dashulya.ai.message_format import MessageFormatter
 from dashulya.domain.memory import MemoryMessage, TruncatedThread
 from tests.support import group_rows
 
@@ -25,9 +24,68 @@ class GroupContextFormatTests(unittest.TestCase):
         )
 
     def render(self, messages: list[MemoryMessage]) -> list[dict[str, str]]:
-        return format_group_context(
-            messages, timezone=ZoneInfo("Europe/Moscow"), bot_id=123
+        return MessageFormatter(bot_id=123).context(messages)
+
+    def test_interlocutor_is_marked_by_current_sender_id_instead_of_name(self) -> None:
+        messages = [
+            self.message(1),
+            replace(self.message(2), author_id=99),
+            replace(self.message(3), author_id=None),
+        ]
+        formatter = MessageFormatter(bot_id=123)
+        first = formatter.context(messages, interlocutor_id=42)[0]["text"]
+        second = formatter.context(messages, interlocutor_id=99)[0]["text"]
+        self.assertIn("42: Alice (@alice, interlocutor)", first)
+        self.assertIn("99: Alice (@alice)", first)
+        self.assertIn("unknown_3: Alice (@alice)", first)
+        self.assertEqual(first.count(", interlocutor)"), 1)
+        self.assertIn("42: Alice (@alice)", second)
+        self.assertIn("99: Alice (@alice, interlocutor)", second)
+        self.assertNotIn("interlocutor", formatter.context(messages)[0]["text"])
+
+    def test_confirmed_channel_author_is_the_interlocutor_without_rewriting_sender(
+        self,
+    ) -> None:
+        messages = [
+            self.message(1),
+            replace(
+                self.message(2),
+                author_id=200,
+                author="Example channel",
+                username="example_channel",
+            ),
+            replace(
+                self.message(3),
+                author_id=-100200,
+                author="Example channel",
+                username="example_channel",
+            ),
+            replace(
+                self.message(4),
+                author_id=300,
+                author="Example channel",
+                username="example_channel",
+            ),
+        ]
+        formatter = MessageFormatter(bot_id=123, author_users={200: 42, -100200: 42})
+        rendered = formatter.context(messages, interlocutor_id=42)
+        header = rendered[0]["text"]
+        self.assertIn(
+            "200: Example channel (@example_channel, author_user=42, interlocutor)",
+            header,
         )
+        self.assertIn(
+            "-100200: Example channel (@example_channel, author_user=42, interlocutor)",
+            header,
+        )
+        self.assertIn("300: Example channel (@example_channel)", header)
+        self.assertEqual(
+            [row[1] for item in rendered for row in group_rows(item["text"])],
+            [42, 200, -100200, 300],
+        )
+        other = formatter.context(messages, interlocutor_id=99)[0]["text"]
+        self.assertNotIn("interlocutor", other)
+        self.assertIn("author_user=42", other)
 
     def test_shared_roster_and_day_headings_keep_exact_text_reply_and_bot_roles(
         self,
@@ -124,7 +182,7 @@ class GroupContextFormatTests(unittest.TestCase):
         self.assertNotIn("not bot", header)
 
     def test_offset_heading_changes_when_dst_repeats_a_local_hour(self) -> None:
-        rendered = format_group_context(
+        rendered = MessageFormatter("America/New_York", bot_id=123).context(
             [
                 replace(
                     self.message(1), sent_at=datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
@@ -133,8 +191,6 @@ class GroupContextFormatTests(unittest.TestCase):
                     self.message(2), sent_at=datetime(2026, 11, 1, 6, 30, tzinfo=UTC)
                 ),
             ],
-            timezone=ZoneInfo("America/New_York"),
-            bot_id=123,
         )
         self.assertIn("America/New_York (UTC-04:00)", rendered[0]["text"])
         self.assertIn("America/New_York (UTC-05:00)", rendered[2]["text"])
@@ -155,12 +211,10 @@ class GroupContextFormatTests(unittest.TestCase):
     ) -> None:
         for root, source in [(1, "source:test:1"), (None, None)]:
             with self.subTest(root=root):
-                rendered = format_group_context(
+                rendered = MessageFormatter(bot_id=123).context(
                     [self.message(7)],
-                    timezone=ZoneInfo("Europe/Moscow"),
-                    bot_id=123,
                     truncated_threads=[
-                        TruncatedThread(7, root, source),
+                        TruncatedThread(7, root, source, 6 if root else None),
                         TruncatedThread(999, 42),
                     ],
                 )
@@ -173,6 +227,8 @@ class GroupContextFormatTests(unittest.TestCase):
                 self.assertEqual(set(details), {"7"})
                 self.assertEqual(details["7"]["root_id"], root)
                 self.assertEqual(details["7"].get("source_id"), source)
+                self.assertEqual(details["7"]["remaining_hops"], 6 if root else None)
+                self.assertTrue(details["7"]["boundary_source_id"].endswith(":7"))
                 self.assertEqual(
                     [row[0] for item in rendered for row in group_rows(item["text"])], [7]
                 )

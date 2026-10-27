@@ -173,53 +173,56 @@ class AIHandlerTests(PostgresTestCase):
         assert reply.reply_parameters is not None
         self.assertEqual(reply.reply_parameters.message_id, 1)
 
-    async def test_markdown_bold_and_source_links_use_native_rich_messages(
+    async def test_markdown_bold_and_source_links_use_explicit_entities(
         self,
     ) -> None:
         link_label = "Обсуждение"
         self.dialogue.reply.return_value = Reply(
-            "Вчера обсуждали **Codex и Claude** 😄\n"
+            "Вчера обсуждали **Codex и Claude** 😄\n\n"
             f"[{link_label}](https://t.me/fastnewsdev_chat/19008)"
         )
         await self.message("Что обсуждали?")
-        reply = self.rich_replies()[-1]
-        self.assertEqual(
-            reply.rich_message.markdown, self.dialogue.reply.return_value.text
-        )
+        reply = self.replies()[-1]
+        self.assertEqual(reply.text, f"Вчера обсуждали Codex и Claude 😄\n\n{link_label}")
+        self.assertEqual([e.type for e in reply.entities or []], ["bold", "text_link"])
         self.assertEqual(reply.chat_id, PRIVATE["id"])
         assert reply.reply_parameters is not None
         self.assertEqual(reply.reply_parameters.message_id, 1)
-        self.assertEqual(self.replies(), [])
+        self.assertEqual(self.rich_replies(), [])
 
-    async def test_native_tables_and_collapsible_details_are_preserved(self) -> None:
-        text = "## Models\n\n| Model | Cost |\n| --- | --- |\n| Luna | Low |\n\n<details><summary>Details</summary>\n\n**More information**\n\n</details>"
+    async def test_tables_use_monospace_entities(self) -> None:
+        text = "## Models\n\n| Model | Cost |\n| --- | --- |\n| Luna | Low |\n\n**More information**"
         self.dialogue.reply.return_value = Reply(text)
         await self.message("Compare models")
-        self.assertEqual(len(self.rich_replies()), 1)
-        self.assertEqual(self.rich_replies()[0].rich_message.markdown, text)
+        self.assertEqual(self.rich_replies(), [])
+        reply = self.replies()[-1]
+        self.assertEqual([e.type for e in reply.entities or []], ["bold", "pre", "bold"])
+        self.assertIn("Model", reply.text)
+        self.assertIn("Luna", reply.text)
 
-    async def test_rejected_rich_message_falls_back_to_formatted_text(self) -> None:
+    async def test_rejected_entity_message_is_not_retried_as_plain_text(self) -> None:
         async def request(bot: Bot, method: TelegramMethod[Any], **kwargs: Any) -> bool:
-            if isinstance(method, SendRichMessage):
-                raise TelegramBadRequest(method, "Bad Request: can't parse rich message")
+            if isinstance(method, SendMessage):
+                raise TelegramBadRequest(method, "Bad Request: can't parse entities")
             return True
 
         self.requests.side_effect = request
         self.dialogue.reply.return_value = Reply(
             "**Codex** [source](https://example.com)"
         )
-        with self.assertLogs("dashulya.bot.replies", level="WARNING"):
+        with self.assertRaises(TelegramBadRequest):
             await self.message("Hi")
-        self.assertEqual(len(self.rich_replies()), 1)
+        self.assertEqual(self.rich_replies(), [])
+        self.assertEqual(len(self.replies()), 1)
         reply = self.replies()[-1]
         self.assertEqual(reply.text, "Codex source")
         self.assertEqual(
             [entity.type for entity in reply.entities or []], ["bold", "text_link"]
         )
 
-    async def test_rich_network_failure_is_not_retried_as_another_message(self) -> None:
+    async def test_entity_network_failure_is_not_retried_as_another_message(self) -> None:
         async def request(bot: Bot, method: TelegramMethod[Any], **kwargs: Any) -> bool:
-            if isinstance(method, SendRichMessage):
+            if isinstance(method, SendMessage):
                 raise TelegramNetworkError(method, "Connection lost after sending")
             return True
 
@@ -227,10 +230,10 @@ class AIHandlerTests(PostgresTestCase):
         self.dialogue.reply.return_value = Reply("**Codex**")
         with self.assertRaises(TelegramNetworkError):
             await self.message("Hi")
-        self.assertEqual(len(self.rich_replies()), 1)
-        self.assertEqual(self.replies(), [])
+        self.assertEqual(self.rich_replies(), [])
+        self.assertEqual(len(self.replies()), 1)
 
-    async def test_oversized_rich_answer_keeps_formatting_in_text_chunks(self) -> None:
+    async def test_long_answer_keeps_formatting_in_text_chunks(self) -> None:
         text = "a" * 33000
         self.dialogue.reply.return_value = Reply(f"**{text}**")
         await self.message("Long answer")
@@ -643,7 +646,8 @@ class AIHandlerTests(PostgresTestCase):
                 images[0].preview_kind, "sticker" if format_flag is not None else None
             )
             self.assertEqual(
-                self.dialogue.reply.call_args.args[1], "Please respond to the sticker."
+                self.dialogue.reply.call_args.args[1],
+                "Please respond to this media in the context of our conversation.",
             )
         self.assertEqual(self.dialogue.reply.await_count, 3)
 
@@ -727,7 +731,7 @@ class AIHandlerTests(PostgresTestCase):
         self.download.assert_not_called()
         self.dialogue.reply.assert_not_awaited()
 
-    async def test_question_replying_to_gif_and_missing_preview_preserve_dialogue(
+    async def test_question_replying_to_gif_and_decode_failure_preserve_dialogue(
         self,
     ) -> None:
         await self.message(
@@ -747,8 +751,8 @@ class AIHandlerTests(PostgresTestCase):
         )
         self.get_file.reset_mock()
         await self.message(animation={**ANIMATION, "thumbnail": None})
-        self.get_file.assert_not_awaited()
+        self.get_file.assert_awaited_once_with("animation")
         self.assertEqual(
             self.dialogue.reply.call_args.kwargs["images"],
-            (ImageOmission(self.update_id, "preview_unavailable"),),
+            (ImageOmission(self.update_id, "decode_failed"),),
         )

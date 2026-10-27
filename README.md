@@ -139,6 +139,8 @@ ID, effective ID, selection reason and available context IDs; they omit reply te
 Private conversation history lasts until a bot restart or `/clear`. The
 known-group registry, saved originals and embedding cache persist between restarts.
 `/clear` resets private reply context; it does not erase saved chat memory.
+The agent chooses memory/history tools when a request needs earlier evidence;
+there is no automatic search before every reply.
 
 Pictures are downloaded into RAM only after owner authorization and group addressing.
 The original photo or image-file bytes go directly to the reply model through AG2's
@@ -150,8 +152,8 @@ receives a source-labelled note that the image is too large. If an unknown or
 understated size exceeds the limit during streaming, the stream stops and the
 same note is supplied while other available text and images remain usable. Downloads
 have a 30-second deadline. File signatures determine JPEG, PNG or WebP MIME types;
-Animation frame extraction, video/audio decoding and document parsing are not
-supported by this image path.
+Telegram animations can supply their first frame as described below; ordinary
+video/audio messages and document parsing are not supported by this image path.
 The reply model must support image input.
 Private history keeps recent images within the same 20 MB budget, replacing the
 oldest images with explicit placeholders as needed. Text and replies remain.
@@ -168,25 +170,40 @@ Missing thumbnails produce an unavailable-image note without downloading the
 animation. Stickers and previews share the image byte budget and RAM-only path.
 Inline custom emoji inside text are not fetched as separate sticker images.
 
-GIF and silent MP4 messages delivered as Telegram animations use their static
-thumbnail through the same path, including captions and direct-reply questions.
-GIF files sent as documents use their thumbnail when Telegram provides one.
-The original animation is not downloaded; missing or oversized previews produce
-an omission note for the agent. Preview inputs are labelled as animations with
-motion unavailable and share the existing 20 MB budget.
+GIF and silent MP4 messages delivered as Telegram animations, including GIF files
+sent as documents, download the original and extract only its first frame in RAM.
+No later frames are decoded or sent to the model. The JPEG is resized to at most
+768 pixels on its longest edge and shares the existing 20 MB image budget.
+If the original is too large or cannot be decoded, Telegram's thumbnail is used
+when available; otherwise the agent receives an omission note. First frames and
+fallback thumbnails are labelled explicitly, with motion unavailable.
+For stickers, reaction GIFs and memes, the agent interprets the conveyed emotion
+or reaction in conversation; explicit captions and questions take priority.
 
-Formatted replies use Telegram Rich Messages for Markdown emphasis, source
-links, headings, lists, tables, quotes, code, and collapsible `<details>` sections.
-Plain answers use ordinary messages. Replies outside the native rich limits, or
-explicitly rejected by Telegram, fall back to text entities with formatting
-preserved across message chunks. Network failures do not trigger a second send.
-The transport follows the [Osinara rich-message pattern](https://github.com/nyxandro/osinara/blob/4ca8eff77e0bf403f998aebefedd2deae2e60ba8/agent/lib/telegram-rich-messages.ts).
+Replies render Markdown directly into ordinary Telegram messages with explicit
+formatting entities. The renderer is adapted from
+[slop-writer 0.5.1](https://github.com/Lancetnik/slop-writer/blob/e80d5b871cfa4816e9db999d55e30c812364cc6d/src/slop_writer/markdown.py)
+under [Apache-2.0](src/dashulya/bot/slop-writer.LICENSE). It supports emphasis,
+source links, headings, lists, quotes, code, `^^underline^^` and `||spoilers||`;
+tables become aligned monospace blocks. HTML tags remain literal text.
+Formatting and UTF-16 offsets survive message chunking. Failed sends are not retried
+through a second transport, avoiding duplicate replies after network errors.
 
 Messages reach the AI with their original Telegram send time in local time,
 for example `25 October 2026 (Sunday) 12:16:50`. The timezone and UTC offset are
 included separately; the application computes the weekday. `BOT_TIMEZONE`
 defaults to `Europe/Moscow` and accepts IANA timezone names. Log timestamps
 remain in UTC.
+Logs correlate model and tool calls with the triggering chat/message. Each tool
+has start/end events with its name, call ID, duration and outcome; model events
+include timings, input/output/reasoning token counts when supplied, and input
+image counts. Media loading and Telegram delivery have separate timings.
+Confirmed reactions log `Reaction delivered` with chat/message IDs, normalized
+emoji, duration and `outcome=sent`; rejected or unconfirmed attempts retain their
+separate outcomes. Typing errors produce a redacted warning. The typing task is
+cancelled and awaited when generation ends, so it cannot delay reply delivery.
+Conversation text, image bytes, tool arguments/results and provider error bodies
+are excluded from these trace events.
 
 ## Getting started
 

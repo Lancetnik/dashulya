@@ -2,14 +2,14 @@ import logging
 from time import perf_counter
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, ReplyParameters
-from aiogram.utils.chat_action import ChatActionSender
 
 from dashulya.ai.dialogue import Dialogue
-from dashulya.bot.formatting import render_markdown, rich_message
+from dashulya.bot.chat_actions import typing
+from dashulya.bot.formatting import render_markdown
 from dashulya.bot.images import ImageInputError, TelegramImages
 from dashulya.bot.messages import conversation_key
+from dashulya.domain.messages import ImageAttachment, ImageOmission
 from dashulya.domain.reactions import MessageReactions
 from dashulya.observability import exception_fields
 
@@ -38,6 +38,21 @@ class ReplyDelivery:
         async with self._dialogue.delivery(conversation_key(message)):
             await self._reply(message, group_context=group_context)
 
+    async def _load_images(
+        self, message: Message
+    ) -> tuple[ImageAttachment | ImageOmission, ...]:
+        started = perf_counter()
+        images = await self._images.load(message)
+        logger.info(
+            "AI media loaded",
+            extra={
+                "chat_id": message.chat.id,
+                "message_id": message.message_id,
+                "duration_ms": round((perf_counter() - started) * 1000),
+            },
+        )
+        return images
+
     async def _reply(
         self, message: Message, *, group_context: dict[str, object] | None
     ) -> None:
@@ -51,24 +66,14 @@ class ReplyDelivery:
         logger.info("AI request started", extra=context)
         reply_to_message_id = message.message_id
         reaction: str | None = None
-        async with ChatActionSender.typing(
-            bot=self._bot,
-            chat_id=message.chat.id,
-            message_thread_id=message.message_thread_id
-            if message.is_topic_message
-            else None,
-        ):
+        async with typing(self._bot, message):
             try:
-                images = await self._images.load(message)
+                images = await self._load_images(message)
                 reply = await self._dialogue.reply(
                     conversation_key(message),
                     message.text
                     or message.caption
-                    or (
-                        "Please respond to the sticker."
-                        if message.sticker
-                        else "Please describe the attached image."
-                    ),
+                    or "Please respond to this media in the context of our conversation.",
                     user_id=message.from_user.id,
                     user_name=message.from_user.full_name,
                     sent_at=message.date,
@@ -114,18 +119,7 @@ class ReplyDelivery:
         reply_parameters = ReplyParameters(
             message_id=reply_to_message_id, allow_sending_without_reply=True
         )
-        rich = rich_message(text)
-        if rich is not None:
-            try:
-                await message.answer_rich(rich, reply_parameters=reply_parameters)
-            except TelegramBadRequest as error:
-                # Only a definitive rejection permits fallback; network failures are ambiguous.
-                logger.warning(
-                    "Rich reply rejected; sending text entities",
-                    extra={**context, **exception_fields(error)},
-                )
-            else:
-                return
+        delivery_started = perf_counter()
         for chunk, entities in render_markdown(text):
             await message.answer(
                 chunk,
@@ -133,3 +127,10 @@ class ReplyDelivery:
                 parse_mode=None,
                 reply_parameters=reply_parameters,
             )
+        logger.info(
+            "AI reply delivered",
+            extra={
+                **context,
+                "duration_ms": round((perf_counter() - delivery_started) * 1000),
+            },
+        )

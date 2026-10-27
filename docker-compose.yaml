@@ -4,6 +4,7 @@ services:
     environment:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env}
       OWNER_USER_ID: ${OWNER_USER_ID:?Set OWNER_USER_ID in .env}
+      OWNER_AUTHOR_IDS: ${OWNER_AUTHOR_IDS:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
       EXA_API_KEY: ${EXA_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}

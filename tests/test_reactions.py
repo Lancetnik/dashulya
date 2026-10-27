@@ -11,16 +11,23 @@ from ag2.testing import TestConfig, TrackingConfig, Turn
 from ag2.tools.final.function_tool import FunctionToolSchema
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
-from aiogram.methods import SendMessage, SendRichMessage, SetMessageReaction
+from aiogram.methods import (
+    SendChatAction,
+    SendMessage,
+    SendRichMessage,
+    SetMessageReaction,
+)
 from aiogram.types import Message, ReactionTypeEmoji
 
 from dashulya.ai.dialogue import Dialogue
 from dashulya.ai.tools.reactions import ReactionTurn
+from dashulya.bot.chat_actions import typing
 from dashulya.bot.reactions import TelegramReactions
 from dashulya.bot.replies import ReplyDelivery
 from dashulya.domain.messages import Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
+from dashulya.observability import JsonLogFormatter
 from tests.support import (
     TEST_API_KEY,
     BotOverride,
@@ -118,6 +125,135 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
                 assert isinstance(reaction.reaction[0], ReactionTypeEmoji)
                 self.assertEqual(reaction.reaction[0].emoji, "❤")
                 self.assertEqual(self.messages(), [])
+
+    async def test_confirmed_reactions_log_delivery_for_final_response_and_tool(
+        self,
+    ) -> None:
+        for turns, target in (
+            ((reply_json("", reaction="❤️"),), 10),
+            ((react(1, "❤️"), reply_json("")), 1),
+        ):
+            with (
+                self.subTest(target=target),
+                self.assertLogs("dashulya.bot.reactions", level="INFO") as logs,
+            ):
+                await self.deliver(*turns)
+            records = [
+                json.loads(JsonLogFormatter().format(record)) for record in logs.records
+            ]
+            delivered = [
+                record for record in records if record["message"] == "Reaction delivered"
+            ]
+            self.assertEqual(len(delivered), 1)
+            self.assertEqual(delivered[0]["chat_id"], -123)
+            self.assertEqual(delivered[0]["message_id"], target)
+            self.assertEqual(delivered[0]["emoji"], "❤")
+            self.assertEqual(delivered[0]["outcome"], "sent")
+            self.assertGreaterEqual(delivered[0]["duration_ms"], 0)
+
+    async def test_typing_network_error_does_not_leak_task_exception_or_block_reply(
+        self,
+    ) -> None:
+        failed = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        errors: list[str] = []
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(
+            lambda event_loop, context: errors.append(str(context.get("message")))
+        )
+        self.addCleanup(loop.set_exception_handler, previous_handler)
+        real_ask = Agent.ask
+
+        async def request(bot: Bot, method: Any, **kwargs: Any) -> bool:
+            if isinstance(method, SendChatAction):
+                failed.set()
+                raise TelegramNetworkError(method, "PRIVATE TOKEN")
+            return True
+
+        async def answer_after_failure(
+            agent: Agent[Any], *args: Any, **kwargs: Any
+        ) -> Any:
+            await failed.wait()
+            return await real_ask(agent, *args, **kwargs)
+
+        self.requests.side_effect = request
+        with (
+            patch.object(Agent, "ask", answer_after_failure),
+            self.assertLogs("dashulya.bot", level="INFO") as logs,
+        ):
+            await self.deliver(reply_json("Answer survived"))
+            await asyncio.sleep(0)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(self.messages()), 1)
+        self.assertNotIn("PRIVATE TOKEN", str(logs.output))
+
+    async def test_reply_cancels_stalled_typing_before_delivering_text(self) -> None:
+        started, cancelled = asyncio.Event(), asyncio.Event()
+        real_ask = Agent.ask
+
+        async def request(bot: Bot, method: Any, **kwargs: Any) -> bool:
+            if isinstance(method, SendChatAction):
+                started.set()
+                try:
+                    await asyncio.Future[None]()
+                finally:
+                    cancelled.set()
+            if isinstance(method, SendMessage):
+                self.assertTrue(cancelled.is_set())
+            return True
+
+        async def answer_after_typing_started(
+            agent: Agent[Any], *args: Any, **kwargs: Any
+        ) -> Any:
+            await started.wait()
+            return await real_ask(agent, *args, **kwargs)
+
+        self.requests.side_effect = request
+        with patch.object(Agent, "ask", answer_after_typing_started):
+            await asyncio.wait_for(self.deliver(reply_json("Ready")), timeout=1)
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual(len(self.messages()), 1)
+
+    async def test_reply_cancellation_also_joins_the_typing_task(self) -> None:
+        started, cancelled = asyncio.Event(), asyncio.Event()
+
+        async def request(bot: Bot, method: Any, **kwargs: Any) -> bool:
+            started.set()
+            try:
+                await asyncio.Future[None]()
+            finally:
+                cancelled.set()
+            return True
+
+        self.requests.side_effect = request
+        message = Message.model_validate({
+            "message_id": 10,
+            "date": SENT_AT,
+            "chat": {"id": 42, "type": "private"},
+        })
+
+        async def interrupted_reply() -> None:
+            async with typing(self.bot, message):
+                await asyncio.Future[None]()
+
+        task = asyncio.create_task(interrupted_reply())
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(cancelled.is_set())
+
+    async def test_negative_telegram_ack_is_logged_as_rejected_not_delivered(
+        self,
+    ) -> None:
+        self.requests.return_value = False
+        with self.assertLogs("dashulya.bot.reactions", level="WARNING") as logs:
+            result = await TelegramReactions(self.bot).set(-123, 10, "👍")
+        event = json.loads(JsonLogFormatter().format(logs.records[-1]))
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(event["outcome"], "rejected")
+        self.assertEqual(event["message"], "Reaction rejected")
+        self.assertNotIn("Reaction delivered", str(logs.output))
 
     async def test_text_takes_precedence_over_a_mixed_reaction_response(self) -> None:
         await self.deliver(reply_json("A substantive answer", reaction="👍"))

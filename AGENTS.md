@@ -79,10 +79,10 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
 - **Replies:** the reply agent returns structured text and an optional message ID.
   Accept a group reply target only from that request's selected context; otherwise
   use the triggering message, as in private chats. All chunks use the same target.
-  Prefer native Rich Markdown for supported formatted replies;
-  `bot/formatting.py` checks rich limits and supplies a text-entity fallback,
-  preserving formatting and UTF-16 offsets when chunking. Fall back after an
-  explicit Telegram rejection; avoid a second send after ambiguous network errors.
+  Render Markdown into ordinary Telegram messages with explicit entities using
+  the slop-writer-based renderer in `bot/formatting.py`. Preserve formatting and
+  UTF-16 offsets when chunking; tables become monospace blocks. Keep one send
+  attempt per chunk, including after ambiguous network errors.
   Keep the typing indicator and Telegram-length limits. Keep
   provider errors and credentials out of logs and replies. The Jester persona
   and response instructions live in `ai/prompts.py`.

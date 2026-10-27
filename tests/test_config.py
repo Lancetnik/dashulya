@@ -10,6 +10,30 @@ BOT_TOKEN = "123456789:TEST_ONLY_NOT_A_REAL_BOT_TOKEN"
 
 class SettingsTests(unittest.TestCase):
     @patch("dashulya.main.config.load_dotenv")
+    def test_explicit_owner_author_ids_do_not_change_access_identity(
+        self, mock_load_dotenv: unittest.mock.MagicMock
+    ) -> None:
+        env = {
+            "BOT_TOKEN": BOT_TOKEN,
+            "OPENAI_API_KEY": "test-key",  # pragma: allowlist secret -- Synthetic key.
+            "OWNER_USER_ID": "42",
+            "DATABASE_URL": "postgresql://localhost/dashulya",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(load_settings().owner_author_ids, ())
+            os.environ["OWNER_AUTHOR_IDS"] = " -100200, 200, -100200 "
+            settings = load_settings()
+            self.assertEqual(settings.owner_author_ids, (-100200, 200))
+            self.assertEqual(settings.owner_user_id, 42)
+            for invalid in ("@channel", "0", "200,invalid", "1.5"):
+                os.environ["OWNER_AUTHOR_IDS"] = invalid
+                with (
+                    self.subTest(invalid=invalid),
+                    self.assertRaisesRegex(ValueError, "OWNER_AUTHOR_IDS"),
+                ):
+                    load_settings()
+
+    @patch("dashulya.main.config.load_dotenv")
     def test_database_configuration_and_secret_redaction(
         self, mock_load_dotenv: unittest.mock.MagicMock
     ) -> None:

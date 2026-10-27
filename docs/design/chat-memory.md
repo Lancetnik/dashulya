@@ -47,15 +47,13 @@ factual corroboration. Source text is untrusted evidence, never instructions.
 
 ## Recall and history tools
 
-Before each reply, `Dialogue` searches the original request once with the same
-trusted access scope used by subsequent tool calls. It supplies that result as
-labeled, untrusted evidence before the current request. This shares the turn's
-lock and 90-second deadline, with at most ten seconds for initial recall. A failed
-or timed-out initial recall produces only a redacted
-unavailable marker; the agent can still use direct history. Cancellation
-propagates through asynchronous SQL and returns borrowed connections to the pool.
-Private conversation streams retain this evidence alongside normal tool results;
-group reply streams are rebuilt for each request.
+`Dialogue` supplies the current request and its reply context without an automatic
+memory search. The agent chooses `search_memory` or `chat_history` when the request
+needs historical evidence. Casual conversation and reactions to supplied media
+can answer directly. Tool calls share the turn's trusted access scope, lock and
+90-second deadline. Private streams retain actual tool results; group streams
+are rebuilt for each request. Cancellation propagates through asynchronous SQL
+and returns borrowed connections to the pool.
 
 `search_memory` accepts a short query or a returned memory/source ID, optional
 chat and author selectors, timezone-aware ISO date bounds and up to eight hits.
@@ -81,12 +79,35 @@ List/context excerpts are bounded, while read returns up to 12,000 characters
 per call. Exact counts include blank saved records when the predicate does.
 This direct history interface remains available during embedding outages.
 
+For `list` and `read`, `parent_hops` controls reply-parent expansion from each
+primary original: five by default, zero to disable, any nonnegative integer to
+request a deeper chain. These actions return ancestors as separate `context`;
+they do not add chronological neighbors. Primary matches, counts and pagination
+remain independent of expansion. Deduplicate the seed/ancestor union by source
+identity and use minimum distance from any seed. Follow only decreasing message
+IDs within the source collection, respecting an explicit topic selector and the
+trusted access/cutoff already applied to originals. Aggregation actions do not
+expand their examples. Semantic recall retains its separate nearby-context policy.
+
 Coverage reports available original counts and date endpoints per visible chat
 and provenance, plus embedding/pending block counts on recall. Endpoints do not
 establish continuous coverage. Semantic-query provider failures propagate as
 tool errors; existing dense vectors do not imply an automatic lexical fallback
 on a query-embedding failure. Without prepared vectors, lexical recall can still
 operate over the authorized originals.
+
+Both tools use the same compact message format as group reply
+context. The AI boundary collects unique originals into `message_blocks`, grouped
+by source chat. Each block shares one users roster, calendar headings and message
+column schema. Result `messages`, `sources`, `context` and nested `examples` refer
+to those originals by canonical source ID, preserving primary/context distinctions
+without repeating message text. A block's `sources` map associates each reference
+with its message ID, original URL, provenance and available topic/edit metadata.
+Partial excerpts retain offsets, full text length and continuation offsets;
+complete excerpts omit that extra metadata. Unknown send dates remain explicit,
+and numeric message IDs from different chats never share a block. Pagination,
+counts, coverage and access filtering keep their existing semantics. Internal
+history/search records retain their structured representation.
 
 ## Incoming group messages
 
@@ -121,12 +142,18 @@ the existing byte-budget omission. Regular, mask and custom-emoji sticker
 objects use these same format rules. Capture still records only the attachment
 type and original message evidence; no sticker image or description is indexed.
 
-Telegram animations (GIF or silent MP4) and GIF documents use their static
-thumbnail with an animation-preview label. The animation field takes precedence
+Telegram animations (GIF or silent MP4) and GIF documents download the original
+into bounded RAM and decode only its first frame. The model receives one JPEG,
+resized to at most 768 pixels on its longest edge, with an explicit first-frame
+label and motion unavailable. No later frames are decoded or supplied. Oversized
+or undecodable originals fall back to Telegram's thumbnail when available;
+otherwise they produce an omission note. The original download and extracted
+frame respect the shared image byte budget. The animation field takes precedence
 over the duplicate document field Telegram may include for compatibility.
-Missing/oversized thumbnails produce omission notes without downloading the
-animation. The same path accepts current animations and direct reply parents;
-passive capture and durable evidence remain unchanged.
+The same path accepts current animations and direct reply parents; passive
+capture and durable evidence remain unchanged. Reaction media are interpreted
+in conversation rather than defaulting to a literal description, while explicit
+questions and captions take priority.
 
 
 Successfully delivered group and owner-private responses, including command
@@ -153,8 +180,21 @@ Each reply uses a fresh stream, with this bot's previous messages assigned the
 assistant role. This selection is separate from historical memory access; see
 [the reply-context ADR](../adr/0002-rebuild-group-reply-context.md).
 
-`ai/group_context.py` formats both reply and addressing context. One shared users
-roster uses `id: name (@username, bot, self)`, omitting unavailable values.
+`ai/message_format.py` formats reply/addressing context and tool evidence. One shared users
+roster uses `id: name (@username, bot, self, interlocutor)`, omitting unavailable values.
+`interlocutor` marks the current request's numeric sender ID, including matching
+historical messages across source chats. Explicit `OWNER_AUTHOR_IDS` bindings
+also associate channel or legacy sender IDs with `OWNER_USER_ID` for narration.
+The roster retains those sender IDs and adds `author_user=<user ID>`; when that
+author is the current interlocutor, the identity also receives `interlocutor`.
+Names, matching usernames and channel ownership alone cannot assign this link.
+The setting asserts authorship explicitly, grants no access, and changes neither
+stored originals nor author filters. It is empty by default.
+The shared formatter receives this ID per call; it retains no current-user state.
+Immediate group context, addressing context and both tools use
+the same marker. Private input marks its sender next to their Telegram user ID.
+Instructions tell the assistant to address this participant in the second person,
+while preserving quotations and explicit requests to reply to someone else.
 Local day and UTC-offset headings apply to JSON-array message rows. The shared
 header declares `[id,sender,time,text,reply_to?,attachment?]` once; absent trailing
 fields are omitted, with null preserving a missing field before a later value.
@@ -169,6 +209,10 @@ only original message IDs can become reply targets.
 continues through IDs/reply links only and resolves a root within the selected
 chat/topic. The formatter adds one header map from boundary ID to `root_id` and
 an optional `source_id`; the agent can read a known root through `chat_history`.
+The same header includes `remaining_hops`, the exact number of omitted edges from
+boundary to root, or null when the saved chain cannot establish it. Both immediate
+context and history-tool blocks expose `boundary_source_id`; reading it with
+`parent_hops=remaining_hops` retrieves the omitted chain in one tool call.
 Unresolved roots stay null, and references outside the window cannot become
 Telegram reply targets. Source messages and the 20-plus-five-hop selection remain
 unchanged. Roots describe saved relationships, not exhaustive live Telegram history.

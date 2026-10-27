@@ -37,6 +37,7 @@ class TruncatedThread:
     boundary_id: int
     root_id: int | None
     source_id: str | None = None
+    remaining_hops: int | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,7 @@ class HistoryReader(Protocol):
         offset: int = 0,
         limit: int = 20,
         topic_id: int | None = None,
+        parent_hops: int = 5,
     ) -> dict[str, Any]: ...
 
 

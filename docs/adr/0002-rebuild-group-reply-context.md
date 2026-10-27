@@ -31,14 +31,25 @@ limit and the next parent is outside the selected union, mark that boundary in
 `truncated_threads`. Trace only IDs and reply links beyond the text window, in
 the same chat/topic, to find the first message established by the saved chain.
 Return its numeric `root_id` and a canonical `source_id` for direct history reads.
+Include the exact `remaining_hops` from boundary to root and a
+`boundary_source_id`, so one `chat_history` read with that `parent_hops` can
+retrieve the omitted chain. An unresolved root also leaves its distance null.
 Missing, out-of-scope or invalid links leave the root null; never substitute the
 first visible or first available message. No marker is needed when the root ends
 exactly at the limit or another seed already supplies the missing parent.
 Root references add neither message text nor permitted Telegram reply targets.
 
-Render one shared users roster as `id: name (@username, bot, self)`, omitting
+Render one shared users roster as `id: name (@username, bot, self, interlocutor)`, omitting
 unavailable handles and flags. A bot marker requires an unambiguous known flag;
 unmarked senders make no human/bot claim. Self identifies this assistant.
+Interlocutor identifies the current request's author by numeric Telegram ID,
+including their historical messages. Address them in the second person unless
+quoting or explicitly asked to reply to another participant. This marker is
+passed per rendering call and never stored on the shared formatter.
+Explicit author bindings may connect a channel or legacy sender ID to that
+person: show `author_user=<user ID>` and preserve the original sender identity.
+Such a binding affects narration only; it does not authorize that sender, merge
+stored sources or imply authorship merely from owning a channel.
 Group entries under local day headings and a timezone/UTC-offset heading; emit
 another heading only when its day or offset changes. Declare message columns
 once: `[id,sender,time,text,reply_to?,attachment?]`. Each entry is one JSON array;
@@ -48,8 +59,11 @@ JSON encoding preserves exact text and prevents newlines from creating rows.
 The roster is a separate user-role metadata input, not a Telegram
 message or reply target; actual bot messages retain the assistant API role.
 Unknown handles are omitted, unknown numeric identities remain distinct, and
-observed aliases remain visible. Uncertain bot flags are not classified. Private input
-formatting and memory-tool source records retain their independent formats.
+observed aliases remain visible. Uncertain bot flags are not classified. Memory
+tool results use this same rendering, grouped by source chat,
+with source references preserving citations and excerpt navigation separately.
+Tool rows remain evidence rather than permitted Telegram reply targets. Private
+user input retains its independent formatting.
 
 The reply agent returns structured `text` and nullable `reply_to_message_id`.
 It may choose the current request or another message actually included in this

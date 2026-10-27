@@ -3,10 +3,12 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
+from ag2.events import ModelRequest, TextInput
 from ag2.testing import TestConfig
 
 from dashulya.ai.agents.factory import create_reply_agent
 from dashulya.ai.dialogue import Dialogue
+from dashulya.ai.message_format import MessageFormatter
 from dashulya.domain.memory import MemoryAccess, MemoryMessage
 from dashulya.memory.history import CanonicalHistory
 from dashulya.memory.store import MessageStore
@@ -51,6 +53,7 @@ class ContextTruncationTests(PostgresTestCase):
         self.assertEqual(len(context.truncated_threads), 1)
         cut = context.truncated_threads[0]
         self.assertEqual((cut.boundary_id, cut.root_id), (4, 1))
+        self.assertEqual(cut.remaining_hops, 3)
         result = await CanonicalHistory(self.store, MemoryAccess(GROUP, False)).query(
             "read", source_id=cut.source_id
         )
@@ -68,6 +71,42 @@ class ContextTruncationTests(PostgresTestCase):
                 )
                 self.assertEqual(context.truncated_threads, ())
 
+    async def test_omitted_hops_count_edges_and_fetch_the_entire_tail_once(self) -> None:
+        identifiers = [10, 40, 90, 100, 300, 900, 1000]
+        parent = None
+        for number in identifiers:
+            await self.store.record(
+                MemoryMessage(
+                    GROUP,
+                    number,
+                    f"Message {number}",
+                    NOW,
+                    42,
+                    "Alice",
+                    "Group",
+                    reply_to_id=parent,
+                )
+            )
+            parent = number
+        context = await self.store.context((GROUP, None), 1000, limit=1, parent_hops=2)
+        rendered = MessageFormatter().context(
+            context.messages, truncated_threads=context.truncated_threads
+        )
+        notes = next(
+            line.removeprefix("truncated_threads: ")
+            for line in rendered[0]["text"].splitlines()
+            if line.startswith("truncated_threads: ")
+        )
+        cut = json.loads(notes)["300"]
+        self.assertEqual(cut["root_id"], 10)
+        self.assertEqual(cut["remaining_hops"], 4)
+        result = await CanonicalHistory(self.store, MemoryAccess(GROUP, False)).query(
+            "read", source_id=cut["boundary_source_id"], parent_hops=cut["remaining_hops"]
+        )
+        self.assertEqual([m["message_id"] for m in result["messages"]], [300])
+        self.assertEqual([m["message_id"] for m in result["context"]], [10, 40, 90, 100])
+        self.assertEqual(result["truncated_threads"], {})
+
     async def test_missing_deeper_history_has_unknown_root_instead_of_first_available_id(
         self,
     ) -> None:
@@ -77,6 +116,7 @@ class ContextTruncationTests(PostgresTestCase):
         self.assertEqual(cut.boundary_id, 4)
         self.assertIsNone(cut.root_id)
         self.assertIsNone(cut.source_id)
+        self.assertIsNone(cut.remaining_hops)
 
     async def test_other_chat_and_other_forum_topic_cannot_supply_a_root(self) -> None:
         await self.chain(start=3, topic=7)
@@ -137,7 +177,13 @@ class ContextTruncationTests(PostgresTestCase):
             )
         self.assertIsNone(result.reply_to_message_id)
         stream = agent_ask.call_args.kwargs["stream"]
-        rendered = str(await stream.history.get_events())
+        rendered = "\n".join(
+            part.content
+            for event in await stream.history.get_events()
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+            if isinstance(part, TextInput)
+        )
         self.assertIn("truncated_threads", rendered)
         recent = await dialogue.recent_context((GROUP, None), through_message_id=30)
         notes = next(
@@ -147,6 +193,7 @@ class ContextTruncationTests(PostgresTestCase):
         )
         cuts = json.loads(notes.removeprefix("truncated_threads: "))
         self.assertEqual(cuts["6"]["root_id"], 1)
+        self.assertEqual(cuts["6"]["remaining_hops"], 5)
         self.assertNotIn(
             1, [row[0] for item in recent for row in group_rows(item["text"])]
         )

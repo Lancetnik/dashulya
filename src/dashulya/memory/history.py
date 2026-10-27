@@ -8,7 +8,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 
-from dashulya.domain.memory import MemoryAccess, OriginalMessage
+from dashulya.domain.memory import MemoryAccess, OriginalMessage, TruncatedThread
 from dashulya.memory.store import MessageStore
 
 
@@ -88,6 +88,73 @@ def _cursor_decode(value: str, fingerprint: str) -> tuple[str, str, int]:
         error_message = "History cursor is invalid for this access scope and query."
         raise ValueError(error_message) from None
     return position[0], position[1], position[2]
+
+
+def _reply_context(
+    seeds: Sequence[OriginalMessage],
+    originals: Sequence[OriginalMessage],
+    parent_hops: int,
+    *,
+    topic_id: int | None = None,
+) -> tuple[list[OriginalMessage], dict[str, dict[str, Any]]]:
+    """Expand the seed union by minimum parent distance; trace omitted IDs only."""
+    by_id = {
+        (message.collection, message.message_id): message
+        for message in originals
+        if topic_id is None or message.topic_id == topic_id
+    }
+
+    def parent(child: OriginalMessage) -> OriginalMessage | None:
+        if child.reply_to_id is None or child.reply_to_id >= child.message_id:
+            return None
+        return by_id.get((child.collection, child.reply_to_id))
+
+    selected = {message.source_id: message for message in seeds}
+    distances = dict.fromkeys(selected, 0)
+    frontier = list(seeds)
+    for depth in range(1, parent_hops + 1):
+        following = []
+        for child in frontier:
+            ancestor = parent(child)
+            if ancestor is not None and ancestor.source_id not in selected:
+                selected[ancestor.source_id] = ancestor
+                distances[ancestor.source_id] = depth
+                following.append(ancestor)
+        frontier = following
+        if not frontier:
+            break
+
+    selected_ids = {(m.collection, m.message_id) for m in selected.values()}
+    cuts = {}
+    for reference, child in selected.items():
+        if (
+            distances[reference] != parent_hops
+            or child.reply_to_id is None
+            or child.reply_to_id >= child.message_id
+            or (child.collection, child.reply_to_id) in selected_ids
+        ):
+            continue
+        root: OriginalMessage | None = child
+        remaining = 0
+        while root is not None and root.reply_to_id is not None:
+            root = parent(root)
+            remaining += 1
+        cuts[reference] = asdict(
+            TruncatedThread(
+                child.message_id,
+                root.message_id if root else None,
+                root.source_id if root else None,
+                remaining if root else None,
+            )
+        )
+    seed_ids = {message.source_id for message in seeds}
+    return (
+        sorted(
+            (message for key, message in selected.items() if key not in seed_ids),
+            key=lambda message: message.order,
+        ),
+        cuts,
+    )
 
 
 class CanonicalHistory:
@@ -230,6 +297,7 @@ class CanonicalHistory:
         offset: int = 0,
         limit: int = 20,
         topic_id: int | None = None,
+        parent_hops: int = 5,
     ) -> dict[str, Any]:
         """Read originals; after is inclusive and before exclusive, in UTC.
 
@@ -237,10 +305,14 @@ class CanonicalHistory:
         list, or characters for read. read returns up to 12000 original characters;
         next_offset reads the remainder. List/context excerpts are capped at1200.
         Primary filters do not constrain bounded context, which always remains
-        within the fixed authority/cutoff and the target's chat and topic.
+        within fixed authority/cutoff, the source chat and an explicit topic selector.
+        list/read expand reply parents only; parent_hops0 leaves just the primaries.
         """
         if action not in {"list", "read", "count", "authors", "chats"}:
             error_message = "Unknown history action."
+            raise ValueError(error_message)
+        if type(parent_hops) is not int or parent_hops < 0:
+            error_message = "parent_hops must be a nonnegative integer."
             raise ValueError(error_message)
         if not 1 <= limit <= 50 or offset < 0 or (cursor is not None and offset):
             error_message = (
@@ -299,13 +371,16 @@ class CanonicalHistory:
             )
         elif action == "read":
             target = next((m for m in matched if m.source_id == source_id), None)
+            context, cuts = _reply_context(
+                [target] if target else [], originals, parent_hops, topic_id=topic_id
+            )
             result.update(
                 messages=[target.render(offset=offset, max_chars=12000)]
                 if target
                 else [],
-                context=[m.render() for m in self.related(target, originals)]
-                if target
-                else [],
+                context=[m.render() for m in context],
+                parent_hops=parent_hops,
+                truncated_threads=cuts,
                 context_note="Context may contain other authors/dates than primary filters; fixed access and snapshot cutoff always apply.",
             )
         elif action in {"authors", "chats"}:
@@ -323,8 +398,14 @@ class CanonicalHistory:
             if offset:
                 page = page[:-offset] if offset < len(page) else []
             chosen = page[-limit:]
+            context, cuts = _reply_context(
+                chosen, originals, parent_hops, topic_id=topic_id
+            )
             result.update(
                 messages=[m.render() for m in chosen],
+                context=[m.render() for m in context],
+                parent_hops=parent_hops,
+                truncated_threads=cuts,
                 next_cursor=_cursor_encode(fingerprint, chosen[0].order)
                 if len(page) > len(chosen)
                 else None,
