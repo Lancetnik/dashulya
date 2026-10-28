@@ -111,6 +111,7 @@ class GroupTrackingTests(PostgresTestCase):
     async def test_empty_list_and_private_chats_are_not_registered(self) -> None:
         await self.message("/groups")
         self.assertIn("I don't know of any groups yet", self.last_reply())
+        self.assertTrue(self.last_reply().startswith("📭"))
         self.assertEqual(await self.groups.list_groups(), [])
 
     async def test_join_lists_groups_with_names_usernames_and_ids(self) -> None:
@@ -125,8 +126,9 @@ class GroupTrackingTests(PostgresTestCase):
         )
         await self.message("/groups")
         text = self.last_reply()
-        self.assertIn("Test group (ID: -123)", text)
-        self.assertIn("Public group @public_group (ID: -100456)", text)
+        self.assertIn("🔴 Test group (ID: -123)", text)
+        self.assertIn("🔴 Public group @public_group (ID: -100456)", text)
+        self.assertTrue(text.startswith("📋 Groups I know I'm in:"))
         self.assertEqual(text.count("— inactive (send /start there)"), 2)
         self.assertLess(text.index("Public group"), text.index("Test group"))
 
@@ -136,7 +138,7 @@ class GroupTrackingTests(PostgresTestCase):
         self.assertEqual(await self.groups.list_groups(), [Group(-123, "Test group")])
         await self.message("/start@dashulya_bot", chat=GROUP_CHAT)
         await self.message("/groups@dashulya_bot", chat=GROUP_CHAT)
-        self.assertIn("Test group (ID: -123)", self.last_reply())
+        self.assertIn("🟢 Test group (ID: -123)", self.last_reply())
         self.assertIn("— active", self.last_reply())
         self.assertEqual(len(await self.groups.list_groups()), 1)
 
