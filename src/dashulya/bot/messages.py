@@ -1,10 +1,32 @@
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
 
 from aiogram.enums import ChatType
 from aiogram.types import Message
 
 from dashulya.domain.memory import MemoryMessage, MessageRecorder
-from dashulya.domain.messages import ConversationKey
+from dashulya.domain.messages import ConversationKey, ImageFile
+
+
+def image_file(message: Message) -> ImageFile | None:
+    """Retain downloadable static images for later selected reply context."""
+    if message.photo:
+        photo = max(message.photo, key=lambda item: item.width * item.height)
+        return ImageFile(photo.file_id, photo.file_size)
+    document = message.document
+    if document is not None and message.animation is None:
+        extension = PurePosixPath(document.file_name or "").suffix.lower()
+        mime = (document.mime_type or "").lower()
+        if mime == "image/gif" or extension == ".gif":
+            return None
+        if mime in {"image/jpeg", "image/png", "image/webp"} or extension in {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".webp",
+        }:
+            return ImageFile(document.file_id, document.file_size)
+    return None
 
 
 def conversation_key(message: Message) -> ConversationKey:
@@ -90,6 +112,7 @@ async def capture_message(
             is_bot=message.from_user.is_bot
             if message.from_user is not None and message.sender_chat is None
             else None,
+            image_file=image_file(message),
         ),
         if_missing=if_missing,
     )

@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, Mock, call, patch
 
@@ -8,7 +9,8 @@ from aiogram import Bot
 from aiogram.types import File, Message
 
 from dashulya.bot.images import ImageInputError, TelegramImages
-from dashulya.domain.messages import ImageAttachment, ImageOmission
+from dashulya.domain.memory import MemoryMessage
+from dashulya.domain.messages import ImageAttachment, ImageFile, ImageOmission
 from tests.media_fixtures import animation_bytes
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"image-data"
@@ -50,6 +52,20 @@ def image_message(**fields: Any) -> Message:
 
 
 class ImageTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def saved_image(number: int, *, size: int | None = None) -> MemoryMessage:
+        return MemoryMessage(
+            chat_id=-123,
+            message_id=number,
+            text="",
+            sent_at=datetime(2026, 10, 25, tzinfo=UTC),
+            author_id=99,
+            author="Boris",
+            chat_title="Group",
+            media_type="photo",
+            image_file=ImageFile(f"photo-{number}", size),
+        )
+
     async def asyncSetUp(self) -> None:
         self.bot = Bot("123:TEST")
         self.addAsyncCleanup(self.bot.session.close)
@@ -89,6 +105,56 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(images[0].message_id, 1)
         self.assertTrue(self.closed)
         self.assertNotIn("image-data", repr(images))
+
+    async def test_context_images_share_budget_and_prefer_recent_sources(self) -> None:
+        images = await self.images.load_context((
+            self.saved_image(1),
+            self.saved_image(2),
+        ))
+        self.assertEqual(images, (ImageAttachment(PNG, "image/png", 2), ImageOmission(1)))
+        self.get_file.assert_awaited_once_with("photo-2")
+
+    async def test_current_image_is_not_downloaded_twice_or_given_a_separate_budget(
+        self,
+    ) -> None:
+        current = ImageAttachment(PNG, "image/png", 2)
+        images = await self.images.load_context(
+            (self.saved_image(1), self.saved_image(2)), images=(current,)
+        )
+        self.assertEqual(images, (current, ImageOmission(1)))
+        self.get_file.assert_not_awaited()
+
+    async def test_context_filters_supplied_ids_before_loading_and_skips_large_files(
+        self,
+    ) -> None:
+        images = await self.images.load_context(
+            (self.saved_image(1, size=len(PNG) + 1),),
+            images=(ImageAttachment(PNG, "image/png", 999),),
+        )
+        self.assertEqual(images, (ImageOmission(1),))
+        self.get_file.assert_not_awaited()
+
+    async def test_unavailable_context_image_does_not_hide_other_images_or_credentials(
+        self,
+    ) -> None:
+        self.get_file.side_effect = [
+            RuntimeError(self.bot.token),
+            self.get_file.return_value,
+        ]
+        images = await self.images.load_context((
+            self.saved_image(1),
+            self.saved_image(2),
+        ))
+        self.assertEqual(
+            images,
+            (ImageOmission(2, "unavailable"), ImageAttachment(PNG, "image/png", 1)),
+        )
+        self.assertNotIn(self.bot.token, repr(images))
+
+    async def test_context_cancellation_propagates(self) -> None:
+        self.get_file.side_effect = asyncio.CancelledError
+        with self.assertRaises(asyncio.CancelledError):
+            await self.images.load_context((self.saved_image(1),))
 
     async def test_oversized_update_and_getfile_size_skip_download(self) -> None:
         oversized = image_message(

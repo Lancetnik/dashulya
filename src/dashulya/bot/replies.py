@@ -1,4 +1,5 @@
 import logging
+from functools import partial
 from time import perf_counter
 
 from aiogram import Bot
@@ -75,7 +76,12 @@ class ReplyDelivery:
                     sent_at=message.date,
                     message_id=message.message_id,
                     group_context=group_context,
-                    **({"images": images} if images else {}),
+                    images=images,
+                    image_loader=(
+                        partial(self._images.load_context, images=images)
+                        if group_context is not None
+                        else None
+                    ),
                 )
                 text = reply.text
                 reply_to_message_id = reply.reply_to_message_id or message.message_id

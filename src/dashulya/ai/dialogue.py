@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -35,6 +35,10 @@ from dashulya.domain.messages import (
 )
 
 logger = logging.getLogger(__name__)
+
+ImageLoader = Callable[
+    [tuple[MemoryMessage, ...]], Awaitable[tuple[ImageAttachment | ImageOmission, ...]]
+]
 
 
 @dataclass
@@ -95,7 +99,7 @@ class Dialogue:
 
     async def _group_input(
         self, key: ConversationKey, current: MemoryMessage
-    ) -> tuple[MemoryStream, str, set[int]]:
+    ) -> tuple[MemoryStream, str, tuple[MemoryMessage, ...]]:
         context = await self._group_history(key, current.message_id)
         originals = context.messages
         saved = next(
@@ -127,7 +131,7 @@ class Dialogue:
                 events.append(ModelRequest([TextInput(item["text"])]))
         stream = MemoryStream()
         await stream.history.replace(events)
-        return stream, rendered[-1]["text"], {item.message_id for item in messages}
+        return stream, rendered[-1]["text"], tuple(messages)
 
     async def _trim_images(self, stream: MemoryStream, incoming_bytes: int) -> None:
         if incoming_bytes > self._max_image_bytes:
@@ -172,6 +176,7 @@ class Dialogue:
                     "too_large": f"too large for the {self._max_image_bytes / 1_000_000:g} MB image byte budget. ",
                     "preview_unavailable": "Telegram did not provide a thumbnail for this media. ",
                     "decode_failed": "The original animation could not be decoded and no usable thumbnail was available. ",
+                    "unavailable": "The saved image could not be downloaded. ",
                 }[image.reason]
                 parts.append(
                     TextInput(
@@ -240,11 +245,11 @@ class Dialogue:
         group_context: dict[str, object] | None = None,
         message_id: int | None = None,
         images: tuple[ImageAttachment | ImageOmission, ...] = (),
+        image_loader: ImageLoader | None = None,
     ) -> Reply:
         message = self._text(text, sent_at=sent_at, user_id=user_id, user_name=user_name)
-        conversation = self._conversation(key)
-        async with conversation.lock:
-            stream = conversation.stream
+        async with self._conversation(key).lock:
+            stream = self._conversation(key).stream
             allowed_reply_ids: set[int] = set()
             if group_context is not None:
                 if not isinstance(group_context.get("message_id"), int):
@@ -252,8 +257,8 @@ class Dialogue:
                     raise ValueError(error_message)
                 message_id = cast("int", group_context["message_id"])
                 parent = group_context.get("reply_to")
-                parent_id = parent.get("message_id") if isinstance(parent, dict) else None
-                stream, message, allowed_reply_ids = await self._group_input(
+                parent = parent.get("message_id") if isinstance(parent, dict) else None
+                stream, message, selected = await self._group_input(
                     key,
                     MemoryMessage(
                         key[0],
@@ -264,9 +269,12 @@ class Dialogue:
                         user_name,
                         "",
                         thread_id=key[1],
-                        reply_to_id=parent_id if isinstance(parent_id, int) else None,
+                        reply_to_id=parent if isinstance(parent, int) else None,
                     ),
                 )
+                allowed_reply_ids = {item.message_id for item in selected}
+                if image_loader is not None:
+                    images = await image_loader(selected)
             elif message_id is not None:
                 message += f"\nTelegram message ID: {message_id}"
             image_inputs = self._image_inputs(

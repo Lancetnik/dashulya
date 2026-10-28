@@ -177,6 +177,8 @@ class AIHandlerTests(_AIHandlerFixture):
             sent_at=datetime.fromtimestamp(1700000000, UTC),
             message_id=1,
             group_context=None,
+            images=(),
+            image_loader=None,
         )
         self.decision_agent.ask.assert_not_awaited()
         reply = self.replies()[-1]

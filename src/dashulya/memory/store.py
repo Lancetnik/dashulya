@@ -1,8 +1,11 @@
 """One canonical PostgreSQL message store for imports, updates and reply context."""
 
 import time
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
+
+from psycopg.types.json import Jsonb
 
 from dashulya.database import Database
 from dashulya.domain.memory import (
@@ -14,7 +17,7 @@ from dashulya.domain.memory import (
     message_source_id,
     message_url_template,
 )
-from dashulya.domain.messages import ConversationKey
+from dashulya.domain.messages import ConversationKey, ImageFile
 
 
 def original(row: dict[str, Any]) -> OriginalMessage:
@@ -38,6 +41,7 @@ def original(row: dict[str, Any]) -> OriginalMessage:
         archive_key=row["archive_key"],
         username=row["author_username"],
         is_bot=row["is_bot"],
+        image_file=ImageFile(**row["image_file"]) if row["image_file"] else None,
     )
 
 
@@ -82,6 +86,7 @@ class MessageStore:
             "reply_to_id": value.reply_to_id,
             "edited_at": edited,
             "media_type": value.media_type,
+            "image_file": Jsonb(asdict(value.image_file)) if value.image_file else None,
             "url": value.url,
             "provenance": value.provenance,
             "archive_key": value.archive_key,
@@ -109,14 +114,14 @@ class MessageStore:
                     collection,message_id,chat_id,body,sent_at,author_id,author,
                     author_username,is_bot,chat_title,chat_username,topic_id,
                     reply_to_id,edited_at,media_type,url,provenance,archive_key,
-                    update_id,version_time,body_folded,author_folded,username_folded
+                    update_id,version_time,body_folded,author_folded,username_folded,image_file
                 ) VALUES (
                     %(collection)s,%(message_id)s,%(chat_id)s,%(body)s,%(sent_at)s,
                     %(author_id)s,%(author)s,%(author_username)s,%(is_bot)s,
                     %(chat_title)s,%(chat_username)s,%(topic_id)s,%(reply_to_id)s,
                     %(edited_at)s,%(media_type)s,%(url)s,%(provenance)s,
                     %(archive_key)s,%(update_id)s,%(version_time)s,
-                    %(body_folded)s,%(author_folded)s,%(username_folded)s
+                    %(body_folded)s,%(author_folded)s,%(username_folded)s,%(image_file)s
                 ) ON CONFLICT(collection,message_id) DO UPDATE SET
                     body=excluded.body,sent_at=excluded.sent_at,author_id=excluded.author_id,
                     author=excluded.author,author_username=excluded.author_username,
@@ -124,6 +129,7 @@ class MessageStore:
                     chat_username=excluded.chat_username,topic_id=excluded.topic_id,
                     reply_to_id=excluded.reply_to_id,edited_at=excluded.edited_at,
                     media_type=excluded.media_type,url=excluded.url,
+                    image_file=excluded.image_file,
                     provenance=excluded.provenance,archive_key=excluded.archive_key,
                     update_id=excluded.update_id,version_time=excluded.version_time,
                     body_folded=excluded.body_folded,author_folded=excluded.author_folded,
@@ -174,6 +180,7 @@ class MessageStore:
                 provenance="live",
                 username=message.username,
                 is_bot=message.is_bot,
+                image_file=message.image_file,
             ),
             update_id=message.update_id,
             if_missing=if_missing,
@@ -278,6 +285,9 @@ class MessageStore:
                     update_id=row["update_id"],
                     username=row["author_username"],
                     is_bot=row["is_bot"],
+                    image_file=ImageFile(**row["image_file"])
+                    if row["image_file"]
+                    else None,
                 )
                 for row in rows
             ),

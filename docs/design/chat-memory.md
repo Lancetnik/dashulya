@@ -115,14 +115,19 @@ Capture runs before owner authorization for every delivered group/supergroup
 message, including participants who cannot invoke the bot. Owner-private
 messages are also captured; other private senders are excluded. Edited updates
 use the same recorder without invoking a reply. Service events are excluded.
-Text, captions and attachment types are stored; passive capture does not download
-or transcribe attachment contents. Incoming reply snapshots can fill missing parents
-without overwriting recorded originals or their deeper reply relationships.
+Text, captions and attachment types are stored, along with Telegram `file_id` and
+known file size for photos and static JPEG, PNG and WebP image documents. Passive
+capture does not download or transcribe attachment contents. Incoming reply
+snapshots can fill missing parents without overwriting recorded originals or
+their deeper reply relationships.
 
-After owner
-authorization and a positive addressing decision, the reply path can download the
-current photo/image document and its direct reply parent's image into RAM. JPEG,
-PNG and WebP signatures are checked, and their combined bytes are capped at
+After sender authorization and a positive addressing decision, the reply path can download the
+current photo/image document and its direct reply parent's image into RAM. Group
+replies also download saved photo/image-file references from the exact selected
+reply context, after selection. Current and direct-reply inputs take priority;
+remaining saved images are loaded newest first without downloading an already
+supplied source again. JPEG, PNG and WebP signatures are checked, and their
+combined bytes are capped at
 20,000,000 during streaming. An image known to exceed the remaining budget is
 not downloaded and instead produces an explicit oversized-image note for the
 reply agent. An overflow
@@ -130,8 +135,12 @@ discovered while streaming stops the download and produces the same note.
 Native AG2 image inputs and omission notes accompany the question, labelled
 with their source message IDs. Group inputs are restricted
 to the selected reply context. No image bytes or generated descriptions are
-written to the evidence database or indexed in chat memory. Older group media
-remain placeholders. Private images stay only in bounded in-memory history.
+written to the evidence database or indexed in chat memory. File references
+survive restarts but stay out of model-facing memory tools and embeddings.
+Unavailable saved files produce omission notes without preventing a reply using
+the remaining inputs. Context downloads share a 30-second deadline. Older media
+without saved references remain placeholders, including photos captured before
+this change. Private image bytes stay only in bounded in-memory history.
 
 The same reply path accepts sticker messages and direct-reply stickers. Static
 stickers use their image bytes; animated and video stickers use Telegram's

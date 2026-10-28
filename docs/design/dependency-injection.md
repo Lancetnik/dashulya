@@ -140,7 +140,12 @@ returns domain `ImageAttachment` values. The Telegram provider supplies the
 download budget from `main/config.py`; the agent provider supplies the same
 budget to `Dialogue` for bounded private image history. `Dialogue` turns these
 values into AG2 native image inputs and restricts group source IDs to the
-selected reply context. Binary media never enters durable message capture.
+selected reply context. `ReplyDelivery` also supplies a per-request image-loading
+callback: `Dialogue` calls it with the exact selected originals, allowing
+`TelegramImages` to download saved photo/image-file references using the remaining
+byte budget. The callback captures only that request's already loaded inputs;
+no conversation state is added to the shared image adapter. Binary media never
+enters durable message capture; only Telegram file references are persisted.
 
 ## Shared graph and scopes
 

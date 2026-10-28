@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
-from dashulya.domain.messages import ConversationKey
+from dashulya.domain.messages import ConversationKey, ImageFile
 
 
 def message_source_id(collection: str, message_id: int) -> str:
@@ -42,6 +42,7 @@ class MemoryMessage:
     update_id: int = 0
     username: str | None = None
     is_bot: bool | None = None
+    image_file: ImageFile | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ class OriginalMessage:
     archive_key: str | None = None
     username: str | None = None
     is_bot: bool | None = None
+    image_file: ImageFile | None = None
 
     @property
     def source_id(self) -> str:

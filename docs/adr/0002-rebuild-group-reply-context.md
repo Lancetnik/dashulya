@@ -76,17 +76,26 @@ Read canonical local messages, including edits and messages awaiting semantic
 indexing. Persist successfully delivered bot responses with their actual Telegram
 IDs and reply targets, including individual chunks. An embedded reply snapshot
 can fill a missing parent but cannot replace an already recorded original.
-Unavailable parents end that path. Attachment types remain placeholders unless
-the current Telegram update supplies the current or direct reply parent's image.
-After authorization and addressing, these images may be downloaded into bounded
-RAM and supplied as native image inputs, labelled with their original Telegram
-message IDs. Accept a group image only when its source is in this request's
-selected context. This enables questions about pictures without retaining binary
-media or replacing original evidence with a generated description; older media
-without supplied bytes remain unavailable. Images that exceed the byte budget
-produce an explicit omission note instead of binary input; known oversized files
-are not downloaded. Serialize generation, Telegram delivery and recording within
-each conversation so a subsequent turn cannot overtake an unfinished delivery.
+Unavailable parents end that path. Capture retains Telegram `file_id` and known
+file size for photos and static JPEG, PNG and WebP image documents. After
+authorization, addressing and context selection, download those saved references
+from the same selected originals into bounded RAM. This extends the original
+current/direct-reply-only image policy: a participant's earlier photo must remain
+visible when a later text request includes it in reply context, even after a
+restart. Persisting references instead of bytes avoids durable binary storage
+and generated descriptions replacing original evidence. Never expose file IDs
+or download URLs in model-facing history or search results.
+
+Native image inputs retain their original Telegram message IDs. The current
+and direct-reply images take priority, then saved images from newest to oldest,
+within one combined byte budget. Accept a group image only when its source is
+in this request's selected context; a source already supplied by the update is
+not downloaded again. Known oversized files are not downloaded. Oversized or
+unavailable saved images produce explicit omission notes; one stale reference
+does not suppress the whole reply. Other older media and records captured before
+file references were stored remain placeholders. Serialize generation, Telegram
+delivery and recording within each conversation so a subsequent turn cannot
+overtake an unfinished delivery.
 
 The selection contains at most 120 unique messages, including the request; depth
 and count do not impose a token limit. Newer messages are excluded from a request's

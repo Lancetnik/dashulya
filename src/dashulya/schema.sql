@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS messages (
     PRIMARY KEY (collection, message_id)
 );
 CREATE INDEX IF NOT EXISTS messages_conversation ON messages(chat_id, topic_id, message_id);
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_file JSONB;
 CREATE INDEX IF NOT EXISTS messages_time ON messages(collection, sent_at, message_id);
 CREATE INDEX IF NOT EXISTS messages_pending ON messages(retry_at)
     WHERE indexed_revision < revision;

@@ -9,9 +9,14 @@ from ag2 import Agent, MemoryStream, ResponseSchema
 from ag2.agent import AgentReply
 from ag2.events import BinaryInput, ModelRequest, ModelResponse, TextInput
 from ag2.testing import TestConfig, TrackingConfig
+from aiogram import Bot
+from aiogram.types import Message
 
 from dashulya.ai.agents.factory import create_reply_agent
 from dashulya.ai.dialogue import Dialogue
+from dashulya.bot.images import TelegramImages
+from dashulya.bot.messages import capture_message
+from dashulya.bot.replies import ReplyDelivery
 from dashulya.domain.memory import ChatHistory, MemoryBackend, MemoryMessage, ReplyContext
 from dashulya.domain.messages import (
     ConversationKey,
@@ -588,6 +593,50 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             "Attached image from Telegram message ID: 1",
             "\n".join(await self.requests(self.last_stream())),
         )
+
+    async def test_passively_captured_photo_reaches_later_group_request(self) -> None:
+        photo = Message.model_validate({
+            "message_id": 1,
+            "date": SENT_AT,
+            "chat": {"id": -123, "type": "supergroup", "title": "Group"},
+            "from": {"id": 99, "is_bot": False, "first_name": "Boris"},
+            "photo": [
+                {"file_id": "photo", "file_unique_id": "unique", "width": 2, "height": 2}
+            ],
+        })
+        request = Message.model_validate({
+            "message_id": 2,
+            "date": SENT_AT,
+            "chat": photo.chat,
+            "from": {"id": 42, "is_bot": False, "first_name": "Anna"},
+            "text": "@dashulya_bot what is in the photo above?",
+        })
+        recorder = AsyncMock()
+        await capture_message(recorder, photo)
+        await capture_message(recorder, request)
+        self.history.context.return_value = ReplyContext(
+            tuple(call.args[0] for call in recorder.record.call_args_list)
+        )
+        bot = AsyncMock(spec=Bot)
+        images = TelegramImages(bot, max_bytes=20_000_000)
+        png = b"\x89PNG\r\n\x1a\nimage-data"
+        with (
+            patch.object(images, "_read", AsyncMock(return_value=png)) as download,
+            patch.object(Message, "answer", AsyncMock()),
+        ):
+            await ReplyDelivery(bot, self.dialogue, images).reply(
+                request, group_context={"message_id": 2}
+            )
+        parts = [
+            part
+            for event in await self.last_stream().history.get_events()
+            if isinstance(event, ModelRequest)
+            for part in event.parts
+        ]
+        self.assertEqual(
+            [part.data for part in parts if isinstance(part, BinaryInput)], [png]
+        )
+        download.assert_awaited_once()
 
     async def test_oversized_direct_image_input_never_invokes_model(self) -> None:
         dialogue = Dialogue(self.agent, max_image_bytes=1)

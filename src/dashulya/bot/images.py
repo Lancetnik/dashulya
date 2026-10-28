@@ -8,7 +8,8 @@ from aiogram.types import Animation, Document, Message, PhotoSize, Sticker
 
 from dashulya.bot.media_frames import FrameBudgetError, FrameDecodeError, first_frame
 from dashulya.bot.messages import conversation_key
-from dashulya.domain.messages import ImageAttachment, ImageOmission
+from dashulya.domain.memory import MemoryMessage
+from dashulya.domain.messages import ImageAttachment, ImageFile, ImageOmission
 
 ImageMediaType = Literal["image/jpeg", "image/png", "image/webp"]
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
@@ -82,7 +83,10 @@ class TelegramImages:
             raise ImageTooLargeError
 
     async def _read(
-        self, file: Animation | Document | PhotoSize | Sticker, *, used_bytes: int
+        self,
+        file: Animation | Document | PhotoSize | Sticker | ImageFile,
+        *,
+        used_bytes: int,
     ) -> bytes:
         self._check_size(used_bytes + 1)
         self._check_size((file.file_size or 0) + used_bytes)
@@ -184,3 +188,48 @@ class TelegramImages:
                 )
                 used_bytes += len(data)
         return tuple(images)
+
+    async def load_context(
+        self,
+        messages: tuple[MemoryMessage, ...],
+        *,
+        images: tuple[ImageAttachment | ImageOmission, ...] = (),
+    ) -> tuple[ImageAttachment | ImageOmission, ...]:
+        """Load saved image references only from the selected reply context."""
+        allowed = {message.message_id for message in messages}
+        result = [image for image in images if image.message_id in allowed]
+        supplied = {image.message_id for image in result}
+        used_bytes = sum(
+            len(image.data) for image in result if isinstance(image, ImageAttachment)
+        )
+        # Prefer the most recent context images after the current/direct-reply inputs.
+        pending = [
+            message
+            for message in reversed(messages)
+            if message.image_file is not None and message.message_id not in supplied
+        ]
+        deadline = asyncio.get_running_loop().time() + 30
+        for message in pending:
+            image = await self._context_image(
+                message, used_bytes=used_bytes, deadline=deadline
+            )
+            result.append(image)
+            if isinstance(image, ImageAttachment):
+                used_bytes += len(image.data)
+        return tuple(result)
+
+    async def _context_image(
+        self, message: MemoryMessage, *, used_bytes: int, deadline: float
+    ) -> ImageAttachment | ImageOmission:
+        assert message.image_file is not None
+        if asyncio.get_running_loop().time() >= deadline:
+            return ImageOmission(message.message_id, "unavailable")
+        try:
+            async with asyncio.timeout_at(deadline):
+                data = await self._read(message.image_file, used_bytes=used_bytes)
+                return ImageAttachment(data, _media_type(data), message.message_id)
+        except ImageTooLargeError:
+            return ImageOmission(message.message_id)
+        except Exception:
+            # A stale file must not suppress an otherwise answerable request.
+            return ImageOmission(message.message_id, "unavailable")

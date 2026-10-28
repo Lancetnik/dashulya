@@ -6,6 +6,14 @@ ConversationKey = tuple[int, int | None]
 
 
 @dataclass(frozen=True)
+class ImageFile:
+    """A Telegram image reference, without downloaded content or a file URL."""
+
+    file_id: str = field(repr=False)
+    file_size: int | None = None
+
+
+@dataclass(frozen=True)
 class ImageAttachment:
     data: bytes = field(repr=False)
     media_type: Literal["image/jpeg", "image/png", "image/webp"]
@@ -17,7 +25,9 @@ class ImageAttachment:
 @dataclass(frozen=True)
 class ImageOmission:
     message_id: int
-    reason: Literal["too_large", "preview_unavailable", "decode_failed"] = "too_large"
+    reason: Literal[
+        "too_large", "preview_unavailable", "decode_failed", "unavailable"
+    ] = "too_large"
 
 
 @dataclass(frozen=True)
