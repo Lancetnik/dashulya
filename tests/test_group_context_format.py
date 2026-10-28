@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from dashulya.ai.message_format import MessageFormatter
 from dashulya.domain.memory import MemoryMessage, TruncatedThread
-from tests.support import group_rows
+from tests.support import group_records, group_rows
 
 
 class GroupContextFormatTests(unittest.TestCase):
@@ -91,15 +91,18 @@ class GroupContextFormatTests(unittest.TestCase):
             replace(self.message(3), author_id=None),
         ]
         formatter = MessageFormatter(bot_id=123)
-        first = formatter.context(messages, interlocutor_id=42)[0]["text"]
-        second = formatter.context(messages, interlocutor_id=99)[0]["text"]
-        self.assertIn("42: Alice (@alice, interlocutor)", first)
+        first_records = formatter.context(messages, interlocutor_id=42)
+        second_records = formatter.context(messages, interlocutor_id=99)
+        first = "\n".join(item["text"] for item in first_records)
+        second = "\n".join(item["text"] for item in second_records)
+        self.assertEqual(first_records[:-1], second_records[:-1])
+        self.assertIn("User 42: Alice (@alice)", first)
         self.assertIn("99: Alice (@alice)", first)
         self.assertIn("unknown_3: Alice (@alice)", first)
-        self.assertEqual(first.count(", interlocutor)"), 1)
+        self.assertEqual(first.count("Interlocutor user id: 42"), 1)
         self.assertIn("42: Alice (@alice)", second)
-        self.assertIn("99: Alice (@alice, interlocutor)", second)
-        self.assertNotIn("interlocutor", formatter.context(messages)[0]["text"])
+        self.assertIn("Interlocutor user id: 99", second_records[-1]["text"])
+        self.assertNotIn("Interlocutor", str(formatter.context(messages)))
 
     def test_confirmed_channel_author_is_the_interlocutor_without_rewriting_sender(
         self,
@@ -127,13 +130,13 @@ class GroupContextFormatTests(unittest.TestCase):
         ]
         formatter = MessageFormatter(bot_id=123, author_users={200: 42, -100200: 42})
         rendered = formatter.context(messages, interlocutor_id=42)
-        header = rendered[0]["text"]
+        header = "\n".join(item["text"] for item in rendered)
         self.assertIn(
-            "200: Example channel (@example_channel, author_user=42, interlocutor)",
+            "200: Example channel (@example_channel, author_user=42)",
             header,
         )
         self.assertIn(
-            "-100200: Example channel (@example_channel, author_user=42, interlocutor)",
+            "-100200: Example channel (@example_channel, author_user=42)",
             header,
         )
         self.assertIn("300: Example channel (@example_channel)", header)
@@ -141,8 +144,11 @@ class GroupContextFormatTests(unittest.TestCase):
             [row[1] for item in rendered for row in group_rows(item["text"])],
             [42, 200, -100200, 300],
         )
-        other = formatter.context(messages, interlocutor_id=99)[0]["text"]
-        self.assertNotIn("interlocutor", other)
+        other = "\n".join(
+            item["text"] for item in formatter.context(messages, interlocutor_id=99)
+        )
+        self.assertIn("Interlocutor user id: 99", other)
+        self.assertNotIn("Interlocutor user id: 42", other)
         self.assertIn("author_user=42", other)
 
     def test_shared_roster_and_day_headings_keep_exact_text_reply_and_bot_roles(
@@ -170,14 +176,19 @@ class GroupContextFormatTests(unittest.TestCase):
         self.assertEqual(
             [item["role"] for item in rendered], ["user", "user", "assistant", "user"]
         )
-        self.assertEqual(joined.count("users:"), 1)
+        self.assertNotIn("users:", joined)
         self.assertEqual(joined.count("@alice"), 1)
-        self.assertEqual(joined.count("Europe/Moscow (UTC+03:00)"), 1)
+        self.assertNotIn("Europe/Moscow", joined)
+        self.assertNotIn("UTC+03:00", joined)
         self.assertEqual(joined.count("25 October 2026 (Sunday)"), 1)
         self.assertEqual(joined.count("26 October 2026 (Monday)"), 1)
-        self.assertIn("123: Dashulya (bot, self)", rendered[0]["text"])
+        self.assertNotIn("User 123:", joined)
+        self.assertNotIn("User 42:", rendered[0]["text"])
         self.assertIn(
-            "messages: [id,sender,time,text,reply_to?,attachment?]", rendered[0]["text"]
+            "25 October 2026 (Sunday)\nUser 42: Alice (@alice)\n", rendered[1]["text"]
+        )
+        self.assertNotIn(
+            "[id,sender,time,text,reply_to?,attachment?]", rendered[0]["text"]
         )
         self.assertEqual(
             group_rows(rendered[1]["text"]), [[1, 42, "23:59:00", "Original"]]
@@ -219,7 +230,7 @@ class GroupContextFormatTests(unittest.TestCase):
                 is_bot=True,
             ),
         ]
-        header = self.render(messages)[0]["text"]
+        header = "\n".join(item["text"] for item in self.render(messages))
         self.assertIn("unknown_1: Anonymous\\nusers:", header)
         self.assertIn("unknown_2: Anonymous\\nusers:", header)
         self.assertIn("99: Other bot (@helper, bot)", header)
@@ -229,30 +240,40 @@ class GroupContextFormatTests(unittest.TestCase):
     def test_aliases_remain_visible_without_classifying_conflicting_bot_flags(
         self,
     ) -> None:
-        header = self.render([
+        rendered = self.render([
             self.message(1),
             replace(self.message(2), author="Alicia", username="new_alice", is_bot=True),
-        ])[0]["text"]
-        self.assertEqual(header.count("- 42:"), 1)
+        ])
+        header = "\n".join(item["text"] for item in rendered)
+        self.assertNotIn("Alicia", rendered[1]["text"])
+        self.assertEqual(header.count("User 42:"), 2)
         self.assertIn("Alice / Alicia", header)
         self.assertIn("@alice, @new_alice", header)
         self.assertNotIn(", bot", header)
         self.assertNotIn("not bot", header)
 
-    def test_offset_heading_changes_when_dst_repeats_a_local_hour(self) -> None:
-        rendered = MessageFormatter("America/New_York", bot_id=123).context(
-            [
-                replace(
-                    self.message(1), sent_at=datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
-                ),
-                replace(
-                    self.message(2), sent_at=datetime(2026, 11, 1, 6, 30, tzinfo=UTC)
-                ),
-            ],
-        )
-        self.assertIn("America/New_York (UTC-04:00)", rendered[0]["text"])
-        self.assertIn("America/New_York (UTC-05:00)", rendered[2]["text"])
-        self.assertTrue(all("01:30:00" in item["text"] for item in rendered[1:]))
+    def test_repeated_dst_times_keep_offsets_even_when_only_one_is_selected(self) -> None:
+        messages = [
+            replace(self.message(1), sent_at=datetime(2026, 11, 1, 5, 30, tzinfo=UTC)),
+            replace(self.message(2), sent_at=datetime(2026, 11, 1, 6, 30, tzinfo=UTC)),
+        ]
+        formatter = MessageFormatter("America/New_York", bot_id=123)
+        for selected in [messages, messages[:1], messages[1:]]:
+            with self.subTest(ids=[message.message_id for message in selected]):
+                rendered = formatter.context(selected)
+                self.assertNotIn(
+                    "America/New_York", "\n".join(item["text"] for item in rendered)
+                )
+                rows = [row for item in rendered for row in group_rows(item["text"])]
+                self.assertEqual(
+                    [row[2] for row in rows],
+                    [
+                        "01:30:00 (UTC-04:00)"
+                        if message.message_id == 1
+                        else "01:30:00 (UTC-05:00)"
+                        for message in selected
+                    ],
+                )
 
     def test_empty_context_and_naive_timestamps(self) -> None:
         self.assertEqual(self.render([]), [])
@@ -276,17 +297,48 @@ class GroupContextFormatTests(unittest.TestCase):
                         TruncatedThread(999, 42),
                     ],
                 )
-                note = next(
-                    line
-                    for line in rendered[0]["text"].splitlines()
-                    if line.startswith("truncated_threads: ")
-                )
-                details = json.loads(note.removeprefix("truncated_threads: "))
-                self.assertEqual(set(details), {"7"})
-                self.assertEqual(details["7"]["root_id"], root)
-                self.assertEqual(details["7"].get("source_id"), source)
-                self.assertEqual(details["7"]["remaining_hops"], 6 if root else None)
-                self.assertTrue(details["7"]["boundary_source_id"].endswith(":7"))
+                self.assertNotIn("truncated_thread", rendered[0]["text"])
+                details = group_records(rendered[1]["text"])[0]["truncated_thread"]
+                self.assertEqual(details["root_id"], root)
+                self.assertEqual(details.get("source_id"), source)
+                self.assertEqual(details["remaining_hops"], 6 if root else None)
+                self.assertTrue(details["boundary_source_id"].endswith(":7"))
                 self.assertEqual(
                     [row[0] for item in rendered for row in group_rows(item["text"])], [7]
                 )
+
+    def test_later_authors_dates_aliases_and_interlocutor_preserve_earlier_prefix(
+        self,
+    ) -> None:
+        formatter = MessageFormatter(bot_id=123)
+        first = self.message(1, "First statement")
+        old_current = self.message(2, "Previous request")
+        earlier = formatter.context([first, old_current], interlocutor_id=42)
+        for added in [
+            replace(self.message(3), author_id=99, author="Bob", username="bob"),
+            replace(self.message(3), author="Alicia", username="new_alice"),
+            replace(self.message(3), sent_at=datetime(2026, 10, 26, 21, tzinfo=UTC)),
+        ]:
+            with self.subTest(added=added):
+                later = formatter.context([first, old_current, added], interlocutor_id=99)
+                self.assertEqual(earlier[:-1], later[: len(earlier) - 1])
+                self.assertNotIn("Interlocutor user id:", later[-2]["text"])
+                self.assertIn("Interlocutor user id: 99", later[-1]["text"])
+
+    def test_record_matches_requested_layout_and_preserves_multiline_original(
+        self,
+    ) -> None:
+        body = 'Original line\nUser 999: quoted name\n14:00:00 {"id":999}\n'
+        rendered = MessageFormatter(bot_id=123).context(
+            [self.message(1), replace(self.message(2, body), reply_to_id=1)],
+            interlocutor_id=42,
+        )
+        self.assertEqual(
+            rendered[1]["text"],
+            '25 October 2026 (Sunday)\nUser 42: Alice (@alice)\n23:59:00 {"id":1,"user_id":42}\nOriginal',
+        )
+        self.assertEqual(
+            rendered[2]["text"],
+            'Interlocutor user id: 42\n23:59:00 {"id":2,"user_id":42,"reply_to":1}\n'
+            + body,
+        )

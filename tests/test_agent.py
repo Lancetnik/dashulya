@@ -1,6 +1,7 @@
 import base64
 import json
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -30,6 +31,7 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
     async def test_group_journal_messages_have_native_roles_in_responses_api(
         self,
     ) -> None:
+        self.settings = replace(self.settings, bot_timezone="Asia/Tokyo")
         requests: list[dict[str, Any]] = []
         history = AsyncMock(spec=ChatHistory)
         history.context.return_value = ReplyContext((
@@ -125,7 +127,16 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
                 ["text", "reply_to_message_id"],
             )
             self.assertFalse(output_format["schema"]["additionalProperties"])
+            instructions = request["instructions"]
+            self.assertEqual(
+                json.dumps(instructions).count("Message timezone: Asia/Tokyo."), 1
+            )
+            columns = "The metadata keys are id, user_id"
+            self.assertEqual(json.dumps(instructions).count(columns), 1)
             messages = [entry for entry in request["input"] if entry["role"] != "system"]
+            self.assertNotIn("Asia/Tokyo", json.dumps(messages))
+            self.assertNotIn("Timezone:", json.dumps(messages))
+            self.assertNotIn(columns, json.dumps(messages))
             self.assertEqual(
                 [entry["role"] for entry in messages],
                 ["user", "user", "assistant", "user", "user", "user"],
@@ -143,6 +154,7 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Current request 3", json.dumps(requests[1]["input"]))
 
     async def test_addressing_uses_decisions_predicate_and_typed_answers(self) -> None:
+        self.settings = replace(self.settings, bot_timezone="Asia/Tokyo")
         requests: list[dict[str, Any]] = []
 
         def respond(request: httpx2.Request) -> httpx2.Response:
@@ -222,6 +234,13 @@ class AgentAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("tools", request)
             self.assertNotIn("reasoning", request)
             self.assertEqual(len(request["input"]), 1)
+            columns = "The metadata keys are id, user_id"
+            self.assertEqual(json.dumps(request["questions"]).count(columns), 1)
+            self.assertNotIn(columns, json.dumps(request["input"]))
+            self.assertEqual(
+                json.dumps(request["questions"]).count("Message timezone: Asia/Tokyo."), 1
+            )
+            self.assertNotIn("Asia/Tokyo", json.dumps(request["input"]))
 
     async def test_reasoning_with_memory_uses_responses_and_executes_tool(self) -> None:
         requests: list[dict[str, Any]] = []

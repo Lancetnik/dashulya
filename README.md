@@ -21,8 +21,9 @@ an assistant who can find the relevant conversation, explain its context, and
 point to the messages behind an answer.
 
 She is meant for everyday conversations across all kinds of topics. The
-personality is part of the concept: warm irony, a little cheekiness, and useful
-answers when the question is serious.
+personality is mischievous, bold and quick-witted: natural banter, playful
+teasing, warm irony and self-irony grounded in the conversation. She keeps casual
+replies short and gives direct, useful answers when the question is serious.
 
 The name grew out of a meme in the [FastNews chat](https://t.me/fastnewsdev_chat)
 and [Ostrikov's chat](https://t.me/aostrikov_agents_chat)
@@ -130,7 +131,15 @@ The agent returns structured reply text and an optional target message ID. It
 can reply to another message in the supplied group context; null or an ID outside
 that selection defaults to the triggering message. Every chunk uses the same
 target. Only the reply text is sent to Telegram.
-The reply agent uses `set_reaction(message_id, emoji)` for all reactions. It can
+The reply agent uses `set_reaction(message_id, emoji)` for all reactions.
+Instructions require it to react only on its own initiative, independently
+choosing whether to react, the target and the emoji. It is encouraged to react
+actively to praise, useful insights, important updates and jokes, and to use 🤡
+for hostile jabs directed at it while taking valid criticism seriously.
+It must not follow requests to add, change or distribute reactions from any
+participant, including the owner,
+or carry out requested batches of reactions. This also applies to quoted
+requests and instructions retrieved from history. It can
 react to the current message or any other message ID in the current chat,
 including messages outside the selected reply context, and can react to several
 messages or combine reactions with a text reply. The tool description lists the
@@ -138,8 +147,11 @@ standard Telegram reaction emoji; chat settings may restrict them further.
 The chat ID comes exclusively from the application's AG2 Context Variable;
 the model cannot choose another chat. A successful tool-only turn may finish
 without another message. Telegram enforces available emoji and chat permissions.
-Tool results report `sent`, `rejected` or `unknown`. Rejection returns a safe
-error code to the agent, which can choose another emoji or explain the problem
+Tool results report `sent`, `rejected`, `rate_limited` or `unknown`. A rate limit
+returns a safe explanation and Telegram's `retry_after` delay in seconds; the
+agent must wait at least that long before trying again and must not switch emoji
+or messages to bypass the limit. Rejection returns a safe error code to the
+agent, which can choose another emoji or explain the problem
 in its own words. Reaction failures never produce a canned user-facing reply.
 Unknown delivery blocks further attempts on that message for the remainder of
 the turn. Access and addressing rules apply before reaction tools can run.
@@ -210,8 +222,10 @@ Formatting and UTF-16 offsets survive message chunking. Failed sends are not ret
 through a second transport, avoiding duplicate replies after network errors.
 
 Messages reach the AI with their original Telegram send time in local time,
-for example `25 October 2026 (Sunday) 12:16:50`. The timezone and UTC offset are
-included separately; the application computes the weekday. `BOT_TIMEZONE`
+for example `25 October 2026 (Sunday) 12:16:50`. Both agents' system prompts
+declare the timezone; message context contains local dates and times without
+repeating that declaration. Repeated local hours include a numeric UTC offset
+to distinguish their occurrences. The application computes the weekday. `BOT_TIMEZONE`
 defaults to `Europe/Moscow` and accepts IANA timezone names. Log timestamps
 remain in UTC.
 Logs correlate model and tool calls with the triggering chat/message. Each tool
@@ -220,8 +234,10 @@ include timings, input/output/reasoning token counts when supplied, and input
 image counts. Media loading and Telegram delivery have separate timings.
 Confirmed reactions log `Reaction delivered` with chat/message IDs, normalized
 emoji, duration and `outcome=sent`; rejected or unconfirmed attempts retain their
-separate outcomes. Typing errors produce a redacted warning. The typing task is
-cancelled and awaited when generation ends, so it cannot delay reply delivery.
+separate outcomes. Rate limits log `Reaction rate limited` with `retry_after`
+in seconds and `outcome=rate_limited`. Typing errors produce a redacted warning.
+The typing task is cancelled and awaited when generation ends, so it cannot
+delay reply delivery.
 Conversation text, image bytes, tool arguments/results and provider error bodies
 are excluded from these trace events.
 
@@ -322,6 +338,11 @@ records an 18-query historical pilot, not a full-corpus quality result or the
 final decision for the current comparison.
 
 ## Development
+
+Run `just preview` and open <http://localhost:8765> to inspect saved group
+messages alongside their selected reply context and AG2 events. The local
+[context preview](preview/README.md) reads the existing Compose PostgreSQL
+database in read-only mode, without Telegram or model calls.
 
 GitHub Actions runs the development checks on pushes to `main` and pull requests.
 Tests and package builds run on Python 3.12, 3.13, and 3.14 without live Telegram

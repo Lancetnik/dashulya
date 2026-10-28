@@ -78,9 +78,13 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
   memory; `/clear` resets the current private conversation. Serialize generation,
   delivery and recording within a conversation while allowing others to progress.
 - **Message time:** carry the original Telegram `message.date` in `BOT_TIMEZONE`.
-  Private inputs use `DD Month YYYY (Weekday) HH:MM:SS` with timezone and UTC offset.
-  Group inputs share a users roster and calendar headings, with local times in
-  compact message entries; preserve user/assistant roles and exact source text.
+  Set the IANA timezone in both agents' system prompts. Private inputs use
+  `DD Month YYYY (Weekday) HH:MM:SS`; repeated local hours carry a numeric UTC
+  offset to distinguish them. Keep timezone declarations out of user context.
+  Group inputs declare each author and local date in the first applicable message;
+  only the final record carries `Interlocutor user id`. Omit this bot's author
+  declaration, retaining its assistant role. Use time/JSON metadata followed by
+  exact source text. Keep later author observations out of the earlier prefix.
   Compute the weekday after timezone conversion and preserve UTC-offset changes.
   Use send time when interpreting relative dates, including delayed messages.
 - **Replies:** the reply agent returns structured text and an optional message ID.

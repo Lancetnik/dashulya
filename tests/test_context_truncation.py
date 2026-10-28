@@ -1,5 +1,4 @@
 import asyncio
-import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
@@ -13,7 +12,7 @@ from dashulya.domain.memory import MemoryAccess, MemoryMessage
 from dashulya.memory.history import CanonicalHistory
 from dashulya.memory.store import MessageStore
 from tests.postgres import PostgresTestCase
-from tests.support import group_rows, reply_json
+from tests.support import group_records, group_rows, reply_json
 
 GROUP = -100123
 NOW = datetime(2026, 10, 25, 12, tzinfo=UTC)
@@ -92,12 +91,12 @@ class ContextTruncationTests(PostgresTestCase):
         rendered = MessageFormatter().context(
             context.messages, truncated_threads=context.truncated_threads
         )
-        notes = next(
-            line.removeprefix("truncated_threads: ")
-            for line in rendered[0]["text"].splitlines()
-            if line.startswith("truncated_threads: ")
+        cut = next(
+            record["truncated_thread"]
+            for item in rendered
+            for record in group_records(item["text"])
+            if "truncated_thread" in record
         )
-        cut = json.loads(notes)["300"]
         self.assertEqual(cut["root_id"], 10)
         self.assertEqual(cut["remaining_hops"], 4)
         result = await CanonicalHistory(self.store, MemoryAccess(GROUP, False)).query(
@@ -184,16 +183,16 @@ class ContextTruncationTests(PostgresTestCase):
             for part in event.parts
             if isinstance(part, TextInput)
         )
-        self.assertIn("truncated_threads", rendered)
+        self.assertIn("truncated_thread", rendered)
         recent = await dialogue.recent_context((GROUP, None), through_message_id=30)
-        notes = next(
-            line
-            for line in recent[0]["text"].splitlines()
-            if line.startswith("truncated_threads: ")
+        cut = next(
+            record["truncated_thread"]
+            for item in recent
+            for record in group_records(item["text"])
+            if record["id"] == 6
         )
-        cuts = json.loads(notes.removeprefix("truncated_threads: "))
-        self.assertEqual(cuts["6"]["root_id"], 1)
-        self.assertEqual(cuts["6"]["remaining_hops"], 5)
+        self.assertEqual(cut["root_id"], 1)
+        self.assertEqual(cut["remaining_hops"], 5)
         self.assertNotIn(
             1, [row[0] for item in recent for row in group_rows(item["text"])]
         )

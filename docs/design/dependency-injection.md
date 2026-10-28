@@ -26,7 +26,7 @@ ai/
   tools/memory.py        Bounded recall over the async backend interface
   tools/history.py       Canonical original reads, counts and pagination
   embeddings.py          Embedding provider/model policy
-  message_format.py      Shared roster, calendar and message rows for context/tools
+  message_format.py      Incremental author/date declarations and message records
   dialogue.py            Reply context, conversation history, turn locking, and reset
   addressing.py          Direct-address recognition and classification
   prompts.py             Persona and response instructions
@@ -67,10 +67,13 @@ actual Telegram bot ID; it owns no chat authority or mutable conversation state.
 The provider adapts optional `OWNER_AUTHOR_IDS` into explicit sender-to-user
 authorship bindings for the formatter. These affect presentation only, not
 sender authorization or memory access. No binding is inferred from names.
-Each rendering receives the current request's sender ID as an argument to mark
-`interlocutor`. Tools receive the session's context through AG2's `Context` annotation
-and read the `user_id` variable supplied by `Dialogue`; this is hidden from the
-model-facing schema. Per-turn identity never mutates the shared formatter.
+Each rendering receives the current request's sender ID as an argument for the
+final `Interlocutor user id` marker. Tools receive the `user_id` supplied by `Dialogue` through an AG2
+`Variable` annotation; this parameter is hidden from the model-facing schema.
+Per-turn identity never mutates the shared formatter.
+The same `BOT_TIMEZONE` setting reaches both agent factories as a system-prompt
+fragment. Context and tool text contain local dates and times without a timezone
+declaration; numeric offsets disambiguate repeated local hours.
 Incoming/outgoing capture share conversion in `bot/messages.py`. Group messages
 from all participants, owner-private messages and successful deliveries use
 actual Telegram IDs; other private senders are excluded. `TelegramProvider`
@@ -91,11 +94,19 @@ retry policy, agent identities, prompts, and response schemas live in `ai`.
 Providers adapt validated application settings to those inputs, attach DI
 middleware, and supply dependencies. `OPENAI_MODEL` selects the reply model;
 `OPENAI_DECISION_MODEL` selects the addressing model.
+The reply prompts separate persona and reaction initiative, delivery rules, shared
+input/citation semantics, historical evidence policy and web policy. Both agents
+receive one shared message-format system-prompt fragment; context and memory
+blocks contain data with incremental author/date declarations and time/JSON
+headers followed by original text. Tool
+docstrings own call parameters, result meanings and recovery contracts; these
+are not repeated in the shared prompts. The addressing classifier has its own
+intent rules and receives only the shared format fragment from the reply prompts.
 The reply-agent factory also attaches `ReplyTrace` middleware for correlated
 model/tool timings, outcomes and token counts. It reads trusted `MemoryAccess`
-from each turn's context and records metadata without arguments, results or
-conversation bodies. `Dialogue` binds tool authority without running an automatic
-recall; the agent chooses which tools to call.
+through an AG2 `Inject` annotation and records metadata without arguments,
+results or conversation bodies. `Dialogue` binds tool authority without running
+an automatic recall; the agent chooses which tools to call.
 
 The reply agent has an AG2 `ResponseSchema[Reply]` for `text` and nullable
 `reply_to_message_id`. `Dialogue` validates the parsed target against the same
@@ -105,16 +116,27 @@ target. The result crosses into `bot` as the domain's `Reply`, with no AG2 objec
 All reactions, including those on the triggering message, use the injected
 `ai/tools/reactions.py` tool. The application-scoped `TelegramReactions`
 implements the domain's `MessageReactions` interface for that tool.
-`set_reaction` accepts only message ID and emoji;
-it reads chat identity from the trusted AG2 `chat_id` Context Variable, with no
-model-facing chat override or reply-context target restriction. `Dialogue`
-passes a fresh `ReactionTurn` through AG2 dependencies for every ask. It owns
-per-turn attempts and unconfirmed deliveries and serializes parallel reaction
-calls, allowing a tool-only turn to finish silently and suppressing retries of any
-unconfirmed target. No mutable chat identity lives on the shared agent or service.
-Telegram errors become fixed result codes returned to the agent and redacted
-logs; cancellation propagates. The tool description lists supported emoji and
-guides recovery after rejection. The agent can correct the call or explain the
+`set_reaction` accepts only message ID and emoji, with no model-facing chat
+override or reply-context target restriction. `Dialogue`
+passes a fresh `ReactionTurn` through the `reaction_turn` AG2 dependency for every
+ask. `get_turn_reactions` combines its `Inject` annotation, the `chat_id`
+`Variable` and the application-scoped `MessageReactions` from Dishka. The tool
+receives that bound `TurnReactions` through `Depends` and delegates to its `set()`
+method. Invalid or missing trusted inputs produce the same rejected result
+without calling Telegram. `ReactionTurn.set()` owns per-turn attempts and
+unconfirmed deliveries and serializes parallel reaction calls, allowing a
+tool-only turn to finish silently and suppressing retries of any unconfirmed
+target. The factory opens a Dishka tool request to resolve the
+application-scoped adapter; the returned object holds no request-scoped resource.
+No mutable chat identity lives on the shared agent or service.
+Known Telegram rejection descriptions become specific `reason` codes and fixed
+English `message` explanations with recovery guidance. Invalid reactions, reaction
+limits, missing messages/chats, membership and permission failures stay distinct;
+`REACTION_INVALID` does not by itself distinguish an unsupported emoji from a
+chat restriction. Unknown descriptions retain an explicit unrecognized-error
+result. Raw descriptions never enter model history or logs; cancellation
+propagates. The tool description lists supported emoji and guides recovery after
+rejection. The agent can correct the call or explain the
 failure itself; delivery adds no canned reaction error response. Reactions
 create no synthetic delivered text messages in chat history.
 
@@ -180,11 +202,17 @@ The reply agent always registers `search_memory` and `chat_history` with `@tool`
 and standard `dishka_ag2.inject`. Their `FromDishka[MemoryBackend]` and
 `FromDishka[HistoryReader]` and `FromDishka[MessageFormatter]` parameters stay outside
 the model-facing schema.
-`Dialogue.reply()` passes `MemoryAccess` through trusted AG2 dependencies using
-the conversation's numeric chat identity and original request cutoff. The
-session provider validates that authority, then binds both readers in
-`AG2Scope.SESSION`. Model-provided filters only narrow access. Groups recall
+`Dialogue.reply()` passes `MemoryAccess` as the trusted `memory_access` AG2
+dependency using the conversation's numeric chat identity and original request
+cutoff. The session provider resolves it through `Inject`, validates that
+authority, then binds both readers in `AG2Scope.SESSION`. Model-provided filters only narrow access. Groups recall
 their own chat; the owner's private conversation can federate saved chats.
+
+AG2 does not resolve annotations for Dishka providers or middleware hooks. These
+boundaries pass the context to FastDepends to resolve `Inject` annotations without
+reading context dictionaries. Resolution disables coercion so malformed trusted
+values still fail the existing validation.
+
 An imported archive needs an explicit numeric binding to become group-visible.
 See [ADR 0003](../adr/0003-bind-chat-memory-access.md).
 

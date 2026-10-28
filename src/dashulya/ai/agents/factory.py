@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from zoneinfo import ZoneInfo
 
 from ag2 import Agent, ResponseSchema
 from ag2.config import ModelConfig
@@ -12,18 +13,27 @@ from dashulya.ai.prompts import (
     GROUP_ADDRESSING_PROMPT,
     INPUT_FORMAT_PROMPT,
     MEMORY_TOOLS_PROMPT,
+    MESSAGE_FORMAT_PROMPT,
     RESPONSE_RULES_PROMPT,
+    TIMEZONE_PROMPT,
     WEB_SEARCH_PROMPT,
 )
 from dashulya.domain.messages import Reply
 
 
 def create_decision_agent(
-    config: ModelConfig, *, middleware: Iterable[MiddlewareFactory] = ()
+    config: ModelConfig,
+    *,
+    timezone: str = "Europe/Moscow",
+    middleware: Iterable[MiddlewareFactory] = (),
 ) -> Agent[bool]:
     return Agent(
         "group_addressing",
-        prompt=GROUP_ADDRESSING_PROMPT,
+        prompt=[
+            GROUP_ADDRESSING_PROMPT,
+            TIMEZONE_PROMPT.format(timezone=ZoneInfo(timezone).key),
+            MESSAGE_FORMAT_PROMPT,
+        ],
         response_schema=ResponseSchema(
             bool,
             description="Does the current message call for a reply from Dashulya?",
@@ -37,6 +47,7 @@ def create_reply_agent(
     config: ModelConfig,
     *,
     tools: Iterable[Tool],
+    timezone: str = "Europe/Moscow",
     middleware: Iterable[MiddlewareFactory] = (),
 ) -> Agent[Reply]:
     return Agent(
@@ -44,6 +55,8 @@ def create_reply_agent(
         prompt=[
             CHARACTER_PROMPT,
             RESPONSE_RULES_PROMPT,
+            TIMEZONE_PROMPT.format(timezone=ZoneInfo(timezone).key),
+            MESSAGE_FORMAT_PROMPT,
             INPUT_FORMAT_PROMPT,
             MEMORY_TOOLS_PROMPT,
             WEB_SEARCH_PROMPT,
@@ -52,7 +65,7 @@ def create_reply_agent(
         config=config,
         response_schema=ResponseSchema(
             Reply,
-            description="Reply text with an optional target message ID; empty text after reaction tools when no further reply is needed.",
+            description="Telegram reply text and optional target message ID.",
         ),
         middleware=[Middleware(ReplyTrace), *middleware],
     )

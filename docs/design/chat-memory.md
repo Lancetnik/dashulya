@@ -98,9 +98,10 @@ operate over the authorized originals.
 
 Both tools use the same compact message format as group reply
 context. The AI boundary collects unique originals into `message_blocks`, grouped
-by source chat. Each block shares one users roster, calendar headings and message
-column schema. Result `messages`, `sources`, `context` and nested `examples` refer
-to those originals by canonical source ID, preserving primary/context distinctions
+by source chat. Each block shares chat metadata and uses incremental author/date
+declarations followed by time/JSON metadata and original text. The system prompt
+defines this record format. Result
+`messages`, `sources`, `context` and nested `examples` refer to those originals by canonical source ID, preserving primary/context distinctions
 without repeating message text. A block's `sources` map associates each reference
 with its message ID, original URL, provenance and available topic/edit metadata.
 Partial excerpts retain offsets, full text length and continuation offsets;
@@ -198,36 +199,43 @@ the public username URL when available, otherwise a numeric supergroup URL.
 Private chats and unknown identities have a null template. Explicit source URLs
 in tool results take precedence; templates apply only to their own block's IDs.
 The header is untrusted navigation metadata, not authority or a reply target.
-One shared users roster uses `id: name (@username, bot, self, interlocutor)`,
-omitting unavailable values.
-`interlocutor` marks the current request's numeric sender ID, including matching
-historical messages across source chats. Explicit `OWNER_AUTHOR_IDS` bindings
-also associate channel or legacy sender IDs with `OWNER_USER_ID` for narration.
-The roster retains those sender IDs and adds `author_user=<user ID>`; when that
-author is the current interlocutor, the identity also receives `interlocutor`.
+The first message from each sender declares `User <id>: name (@username, bot)`.
+Later aliases or flag changes produce an updated declaration at that message,
+without rewriting the earlier prefix. This bot has no author declaration;
+its native assistant role identifies it. Only the final rendered message carries
+`Interlocutor user id: <id>` for the current request's sender; in tool evidence,
+that ID is independent of the retrieved record's author. Explicit
+`OWNER_AUTHOR_IDS` bindings associate channel or legacy sender IDs with
+`OWNER_USER_ID` for narration. Declarations retain the source sender IDs and
+add `author_user=<user ID>`.
 Names, matching usernames and channel ownership alone cannot assign this link.
 The setting asserts authorship explicitly, grants no access, and changes neither
 stored originals nor author filters. It is empty by default.
 The shared formatter receives this ID per call; it retains no current-user state.
 Immediate group context, addressing context and both tools use
-the same marker. Private input marks its sender next to their Telegram user ID.
+the final marker. Private input marks its sender next to their Telegram user ID.
 Instructions tell the assistant to address this participant in the second person,
 while preserving quotations and explicit requests to reply to someone else.
-Local day and UTC-offset headings apply to JSON-array message rows. The shared
-header declares `[id,sender,time,text,reply_to?,attachment?]` once; absent trailing
-fields are omitted, with null preserving a missing field before a later value.
-JSON encoding preserves escapes and multiline content without creating rows.
+Local day headings occur in the first message of each day. The configured IANA timezone
+belongs to both agents' system prompts; user context and tool evidence omit its
+declaration. A repeated local hour carries its numeric UTC offset in the time
+field, including when only one occurrence is selected. A shared
+system-prompt fragment defines the time/JSON header keys `id`, `user_id`,
+optional `reply_to` and `attachment`, followed by the exact original text on
+the next line. Text retains its original newlines and quotes. Tool blocks use
+`===` between records and explicitly mark this bot's originals with JSON
+`role: assistant`; native reply context uses actual assistant events.
 Unknown handles are omitted; unknown
-numeric senders receive separate local references. The roster is an extra
-metadata input, while each original retains its user/assistant API role and
+numeric senders receive separate local references. Chat metadata is an extra
+input, while each original retains its user/assistant API role and
 only original message IDs can become reply targets.
 
 `MessageStore.context()` returns `ReplyContext`: bounded messages plus
 `truncated_threads` navigation metadata. For depth-cut boundaries, the SQL reader
 continues through IDs/reply links only and resolves a root within the selected
-chat/topic. The formatter adds one header map from boundary ID to `root_id` and
-an optional `source_id`; the agent can read a known root through `chat_history`.
-The same header includes `remaining_hops`, the exact number of omitted edges from
+chat/topic. The formatter attaches `truncated_thread` JSON to each boundary record,
+with `root_id` and an optional `source_id`; the agent can read a known root through
+`chat_history`. It includes `remaining_hops`, the exact number of omitted edges from
 boundary to root, or null when the saved chain cannot establish it. Both immediate
 context and history-tool blocks expose `boundary_source_id`; reading it with
 `parent_hops=remaining_hops` retrieves the omitted chain in one tool call.

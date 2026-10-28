@@ -86,7 +86,7 @@ class DialogueRecallTests(unittest.IsolatedAsyncioTestCase):
             self.assertLogs("dashulya.ai.agents.tracing", level="INFO") as logs,
         ):
             self.assertEqual(await self.reply(dialogue, chat_id=-123), Reply("Answer"))
-        access = ask.call_args.kwargs["dependencies"][MemoryAccess]
+        access = ask.call_args.kwargs["dependencies"]["memory_access"]
         self.assertEqual(access, MemoryAccess(-123, False, before=NOW, before_id=2))
         recall.assert_called_once_with(access)
         history.assert_called_once_with(access)

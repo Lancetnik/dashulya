@@ -269,7 +269,7 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
             await agent.ask(
                 "What database did we choose?",
                 stream=stream,
-                dependencies={MemoryAccess: MemoryAccess(42, True)},
+                dependencies={"memory_access": MemoryAccess(42, True)},
             )
         ).content()
         assert reply is not None

@@ -2,10 +2,11 @@
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from time import perf_counter
+from typing import Annotated
 
-from ag2 import Context
+from ag2 import Context, Inject
 from ag2.events import (
     BaseEvent,
     BinaryInput,
@@ -17,24 +18,30 @@ from ag2.events import (
     ToolErrorEvent,
 )
 from ag2.middleware.base import BaseMiddleware, LLMCall, ToolExecution, ToolResultType
+from fast_depends import inject
 
 from dashulya.domain.memory import MemoryAccess
 
 logger = logging.getLogger(__name__)
 
 
-def _request(context: Context) -> dict[str, object]:
-    access = context.dependencies.get(MemoryAccess)
+def _request_fields(
+    access: Annotated[MemoryAccess | None, Inject("memory_access", default=None)],
+) -> dict[str, object]:
     if isinstance(access, MemoryAccess):
         return {"chat_id": access.chat_id, "message_id": access.before_id}
     return {}
+
+
+# AG2 calls middleware hooks directly, outside its annotation resolver.
+_request: Callable[..., dict[str, object]] = inject(_request_fields, cast=False)
 
 
 class ReplyTrace(BaseMiddleware):
     async def on_llm_call(
         self, call_next: LLMCall, events: Sequence[BaseEvent], context: Context
     ) -> ModelResponse:
-        fields = _request(context)
+        fields = _request(__ctx__=context)
         parts = [
             part
             for event in events
@@ -84,7 +91,11 @@ class ReplyTrace(BaseMiddleware):
     async def on_tool_execution(
         self, call_next: ToolExecution, event: ToolCallEvent, context: Context
     ) -> ToolResultType:
-        fields = {**_request(context), "tool_name": event.name, "tool_call_id": event.id}
+        fields = {
+            **_request(__ctx__=context),
+            "tool_name": event.name,
+            "tool_call_id": event.id,
+        }
         started = perf_counter()
         logger.info("AI tool call started", extra=fields)
         try:

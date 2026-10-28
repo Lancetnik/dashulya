@@ -10,7 +10,14 @@ from ag2.events import DataInput, ToolCallEvent, ToolResultEvent
 from ag2.testing import TestConfig, TrackingConfig, Turn
 from ag2.tools.final.function_tool import FunctionToolSchema
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramUnauthorizedError,
+)
 from aiogram.methods import (
     SendChatAction,
     SendMessage,
@@ -25,6 +32,7 @@ from dashulya.bot.chat_actions import typing
 from dashulya.bot.reactions import TelegramReactions
 from dashulya.bot.replies import ReplyDelivery
 from dashulya.domain.messages import Reply
+from dashulya.domain.reactions import ReactionResult
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.observability import JsonLogFormatter
@@ -388,7 +396,7 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
                     "Please react",
                     stream=stream,
                     variables=variables,
-                    dependencies={ReactionTurn: ReactionTurn()},
+                    dependencies={"reaction_turn": ReactionTurn()},
                 )
                 results = [
                     event
@@ -397,8 +405,25 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
                 ]
                 part = results[0].result.parts[0]
                 assert isinstance(part, DataInput)
-                assert isinstance(part.data, dict)
-                self.assertEqual(part.data["reason"], "missing_chat_context")
+                assert isinstance(part.data, ReactionResult)
+                self.assertEqual(part.data.reason, "missing_chat_context")
+        self.assertEqual(self.reactions(), [])
+
+    async def test_missing_reaction_turn_never_calls_telegram(self) -> None:
+        _, _, agent = await self.dialogue(react(1), reply_json("Unavailable"))
+        stream = MemoryStream()
+        await agent.ask("React", stream=stream, variables={"chat_id": -123})
+        results = [
+            event
+            for event in await stream.history.get_events()
+            if isinstance(event, ToolResultEvent)
+        ]
+        part = results[0].result.parts[0]
+        assert isinstance(part, DataInput)
+        self.assertEqual(
+            part.data,
+            ReactionResult("rejected", 1, "🔥", "missing_chat_context"),
+        )
         self.assertEqual(self.reactions(), [])
 
     async def test_tool_failure_returns_redacted_error_without_a_canned_reply(
@@ -422,10 +447,116 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
         ]
         part = results[0].result.parts[0]
         assert isinstance(part, DataInput)
-        assert isinstance(part.data, dict)
-        self.assertEqual(part.data["status"], "rejected")
-        self.assertEqual(part.data["reason"], "telegram_rejected")
+        assert isinstance(part.data, ReactionResult)
+        self.assertEqual(part.data.status, "rejected")
+        self.assertEqual(part.data.reason, "telegram_rejected")
+        self.assertIn("unrecognized reason", part.data.message or "")
         self.assertNotIn("PRIVATE TOKEN", str(logs.output) + str(part.data))
+
+    async def test_concrete_telegram_rejections_reach_the_model_without_raw_errors(
+        self,
+    ) -> None:
+        cases = (
+            ("Bad Request: REACTION_INVALID", "reaction_invalid", "not allowed"),
+            ("Bad Request: REACTION_EMPTY", "invalid_emoji", "empty"),
+            ("Bad Request: MESSAGE_ID_INVALID", "message_not_found", "message"),
+            ("Bad Request: MSG_ID_INVALID", "message_not_found", "message"),
+            ("Bad Request: CHAT_ADMIN_REQUIRED", "permission_denied", "permission"),
+            ("Bad Request: XREACTION_INVALIDX", "telegram_rejected", "unrecognized"),
+            ("Forbidden: PRIVATE TOKEN", "permission_denied", "access"),
+            ("Unauthorized: PRIVATE TOKEN", "bot_unauthorized", "authenticate"),
+            ("Bad Request: REACTIONS_TOO_MANY", "reactions_too_many", "limit"),
+            ("Bad Request: message to react not found", "message_not_found", "message"),
+            ("Bad Request: chat not found", "chat_not_found", "chat"),
+            ("Bad Request: not enough rights", "permission_denied", "permission"),
+            (
+                "Forbidden: bot was kicked from the supergroup chat",
+                "bot_removed",
+                "removed",
+            ),
+            (
+                "Forbidden: bot is not a member of the channel chat",
+                "bot_not_member",
+                "member",
+            ),
+            ("Forbidden: bot was blocked by the user", "bot_blocked", "blocked"),
+        )
+        for description, reason, detail in cases:
+            with self.subTest(description=description):
+                method = SetMessageReaction(chat_id=-123, message_id=10)
+                raw_error = description + " PRIVATE TOKEN"
+                error: TelegramAPIError
+                if description.startswith("Forbidden:"):
+                    error = TelegramForbiddenError(method, raw_error)
+                elif description.startswith("Unauthorized:"):
+                    error = TelegramUnauthorizedError(method, raw_error)
+                else:
+                    error = TelegramBadRequest(method, raw_error)
+                self.requests.side_effect = error
+                _, _, agent = await self.dialogue(react(10), reply_json(""))
+                stream = MemoryStream()
+                with self.assertLogs("dashulya.bot.reactions", level="WARNING") as logs:
+                    await agent.ask(
+                        "React",
+                        stream=stream,
+                        variables={"chat_id": -123},
+                        dependencies={"reaction_turn": ReactionTurn()},
+                    )
+                results = [
+                    event
+                    for event in await stream.history.get_events()
+                    if isinstance(event, ToolResultEvent)
+                ]
+                part = results[0].result.parts[0]
+                assert isinstance(part, DataInput)
+                payload = json.loads(agent.serializer.encode(part.data))
+                self.assertEqual(payload["status"], "rejected")
+                self.assertEqual(payload["reason"], reason)
+                self.assertIn(detail, payload["message"])
+                self.assertNotIn("PRIVATE TOKEN", str(payload) + str(logs.output))
+
+    async def test_rate_limit_returns_retry_delay_and_safe_instructions(self) -> None:
+        method = SetMessageReaction(chat_id=-123, message_id=1)
+        self.requests.side_effect = TelegramRetryAfter(method, "PRIVATE TOKEN", 37)
+        dialogue, config, agent = await self.dialogue(react(1), reply_json(""))
+        ask = AsyncMock(wraps=agent.ask)
+        with (
+            patch.object(agent, "ask", ask),
+            self.assertLogs("dashulya.bot.reactions", level="WARNING") as logs,
+        ):
+            result = await self.reply(dialogue)
+        self.assertEqual(result, Reply(""))
+        self.assertEqual(len(self.reactions()), 1)
+        stream = ask.call_args.kwargs["stream"]
+        results = [
+            event
+            for event in await stream.history.get_events()
+            if isinstance(event, ToolResultEvent)
+        ]
+        part = results[0].result.parts[0]
+        assert isinstance(part, DataInput)
+        assert isinstance(part.data, ReactionResult)
+        self.assertEqual(part.data.status, "rate_limited")
+        self.assertEqual(part.data.reason, "telegram_rate_limited")
+        self.assertEqual(part.data.retry_after, 37)
+        self.assertEqual(
+            part.data.message,
+            "Telegram is rate limiting reactions. Wait at least 37 seconds before "
+            "trying again. Do not try a different emoji or another message to "
+            "bypass this limit.",
+        )
+        event = json.loads(JsonLogFormatter().format(logs.records[-1]))
+        self.assertEqual(event["outcome"], "rate_limited")
+        self.assertEqual(event["error_type"], "TelegramRetryAfter")
+        self.assertEqual(event["retry_after"], 37)
+        self.assertNotIn("PRIVATE TOKEN", str(logs.output) + str(part.data))
+        schema = next(
+            item
+            for item in config.calls[0].tools
+            if isinstance(item, FunctionToolSchema)
+            and item.function.name == "set_reaction"
+        )
+        self.assertIn("retry_after", schema.function.description or "")
 
     async def test_unknown_tool_delivery_is_not_retried_with_another_emoji(self) -> None:
         method = SetMessageReaction(chat_id=-123, message_id=10)
@@ -438,6 +569,19 @@ class ReactionTests(unittest.IsolatedAsyncioTestCase):
         self.requests.side_effect = request
         with self.assertLogs("dashulya.bot.reactions", level="WARNING"):
             await self.deliver(react(10), react(10, "👍"), reply_json(""))
+        self.assertEqual(len(self.reactions()), 1)
+        self.assertEqual(self.messages(), [])
+
+    async def test_parallel_calls_do_not_repeat_an_unconfirmed_target(self) -> None:
+        async def request(bot: Bot, call: Any, **kwargs: Any) -> bool:
+            if isinstance(call, SetMessageReaction):
+                await asyncio.sleep(0)
+                raise TelegramNetworkError(call, "PRIVATE TOKEN")
+            return True
+
+        self.requests.side_effect = request
+        with self.assertLogs("dashulya.bot.reactions", level="WARNING"):
+            await self.deliver([react(10), react(10, "👍")], reply_json(""))
         self.assertEqual(len(self.reactions()), 1)
         self.assertEqual(self.messages(), [])
 

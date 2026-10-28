@@ -5,6 +5,10 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 default:
     @just --list
 
+# Start the local, read-only reply context preview at http://localhost:8765.
+preview:
+    docker compose -f docker-compose.yaml -f preview/compose.yaml up -d --build preview
+
 _lint *args:
     uv run --locked --no-dev --group lint {{args}}
 

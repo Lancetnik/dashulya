@@ -162,8 +162,8 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             requests,
             [
-                "Sent at: 24 October 2026 (Saturday) 23:59:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42; interlocutor):\nYesterday",
-                "Sent at: 25 October 2026 (Sunday) 03:05:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42; interlocutor):\nToday",
+                "Sent at: 24 October 2026 (Saturday) 23:59:00\nAnna (Telegram user ID: 42; interlocutor):\nYesterday",
+                "Sent at: 25 October 2026 (Sunday) 03:05:00\nAnna (Telegram user ID: 42; interlocutor):\nToday",
             ],
         )
 
@@ -172,7 +172,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             (42, None), "Hello", sent_at=datetime(2026, 10, 25, 9, 16, 50, tzinfo=UTC)
         )
         self.assertIn(
-            "Sent at: 25 October 2026 (Sunday) 12:16:50\nTimezone: Europe/Moscow (UTC+03:00)",
+            "Sent at: 25 October 2026 (Sunday) 12:16:50\n",
             (await self.requests(self.last_stream()))[0],
         )
 
@@ -190,8 +190,9 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         requests = await self.requests(self.last_stream())
         for request in requests:
             self.assertIn("01 November 2026 (Sunday) 01:30:00", request)
-        self.assertIn("America/New_York (UTC-04:00)", requests[0])
-        self.assertIn("America/New_York (UTC-05:00)", requests[1])
+        self.assertIn("01:30:00 (UTC-04:00)", requests[0])
+        self.assertIn("01:30:00 (UTC-05:00)", requests[1])
+        self.assertTrue(all("America/New_York" not in request for request in requests))
 
     async def test_send_time_requires_explicit_timezone(self) -> None:
         with self.assertRaisesRegex(ValueError, "timezone"):
@@ -248,7 +249,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await self.requests(fresh),
             [
-                "Sent at: 25 October 2026 (Sunday) 15:00:00\nTimezone: Europe/Moscow (UTC+03:00)\nAnna (Telegram user ID: 42; interlocutor):\nFresh"
+                "Sent at: 25 October 2026 (Sunday) 15:00:00\nAnna (Telegram user ID: 42; interlocutor):\nFresh"
             ],
         )
 
@@ -350,7 +351,15 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         )
         stream = self.last_stream()
         request = (await self.requests(stream))[-1]
-        self.assertIn("25 October 2026 (Sunday)", "\n".join(await self.requests(stream)))
+        events = list(await stream.history.get_events())
+        self.assertIn(
+            "25 October 2026 (Sunday)",
+            "\n".join(
+                event.content or ""
+                for event in events
+                if isinstance(event, ModelResponse)
+            ),
+        )
         self.assertEqual(group_rows(request)[-1][2], "15:00:00")
         self.assertEqual(group_rows(request)[-1][4], 1)
         events = list(await stream.history.get_events())

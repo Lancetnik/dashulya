@@ -14,6 +14,7 @@ _CONTEXT_FIELDS = (
     "chat_id",
     "message_id",
     "duration_ms",
+    "retry_after",
     "outcome",
     "emoji",
     "tool_name",

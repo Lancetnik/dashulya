@@ -26,7 +26,7 @@ class AgentTracingTests(unittest.IsolatedAsyncioTestCase):
         self.context = ConversationContext(
             MemoryStream(),
             dependencies={
-                MemoryAccess: MemoryAccess(
+                "memory_access": MemoryAccess(
                     -123, False, before=datetime(2026, 10, 27, tzinfo=UTC), before_id=7
                 )
             },

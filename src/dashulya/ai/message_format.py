@@ -1,10 +1,12 @@
 """One compact message format for immediate context and retrieved evidence."""
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
+
+from ag2.events import ModelMessage, ModelRequest, ModelResponse, TextInput
 
 from dashulya.domain.memory import (
     MemoryMessage,
@@ -18,6 +20,15 @@ if TYPE_CHECKING:
     from datetime import date
 
 type Message = MemoryMessage | OriginalMessage
+
+
+def format_local_time(local: datetime, *, include_date: bool = False) -> str:
+    """Format a converted send time, disambiguating repeated local hours."""
+    text = local.strftime("%d %B %Y (%A) %H:%M:%S" if include_date else "%H:%M:%S")
+    if local.replace(fold=0).utcoffset() != local.replace(fold=1).utcoffset():
+        offset = local.strftime("%z")
+        text += f" (UTC{offset[:3]}:{offset[3:]})"
+    return text
 
 
 def _sender(message: Message) -> int | str:
@@ -35,39 +46,70 @@ def _reference(message: Message) -> str:
     return message_source_id(f"telegram:{message.chat_id}", message.message_id)
 
 
-def _users(
-    messages: Sequence[Message],
-    bot_id: int | None,
-    interlocutor_id: int | None,
+def _author(
+    sender: int | str,
+    observations: Sequence[Message],
     author_users: Mapping[int, int],
 ) -> str:
-    people: dict[int | str, list[Message]] = {}
-    for message in messages:
-        people.setdefault(_sender(message), []).append(message)
-    lines = ["users:"]
-    for sender, observations in people.items():
-        names = list(dict.fromkeys(item.author for item in observations))
-        details = list(
-            dict.fromkeys(
-                "@" + item.username.lstrip("@") for item in observations if item.username
-            )
+    names = list(dict.fromkeys(item.author for item in observations))
+    details = list(
+        dict.fromkeys(
+            "@" + item.username.lstrip("@") for item in observations if item.username
         )
-        flags = {item.is_bot for item in observations if item.is_bot is not None}
+    )
+    flags = {item.is_bot for item in observations if item.is_bot is not None}
+    if flags == {True}:
+        details.append("bot")
+    author_user = author_users.get(sender) if type(sender) is int else None
+    if author_user is not None and author_user != sender:
+        details.append(f"author_user={author_user}")
+    label = " / ".join(names)
+    if details:
+        label += " (" + ", ".join(details) + ")"
+    # Keep source names on one physical metadata line.
+    return f"User {sender}: {json.dumps(label, ensure_ascii=False)[1:-1]}"
+
+
+def _authors(
+    messages: Sequence[Message], bot_id: int | None, author_users: Mapping[int, int]
+) -> Iterator[str | None]:
+    people: dict[int | str, list[Message]] = {}
+    labels: dict[int | str, str] = {}
+    for message in messages:
+        sender = _sender(message)
         if sender == bot_id:
-            details.extend(["bot", "self"])
-        elif flags == {True}:
-            details.append("bot")
-        author_user = author_users.get(sender) if type(sender) is int else None
-        if author_user is not None and author_user != sender:
-            details.append(f"author_user={author_user}")
-        if type(interlocutor_id) is int and interlocutor_id in {sender, author_user}:
-            details.append("interlocutor")
-        label = " / ".join(names)
-        if details:
-            label += " (" + ", ".join(details) + ")"
-        # Keep the human-readable roster on one physical line per identity.
-        lines.append(f"- {sender}: {json.dumps(label, ensure_ascii=False)[1:-1]}")
-    return "\n".join(lines)
+            yield None
+            continue
+        observations = people.setdefault(sender, [])
+        observations.append(message)
+        label = _author(sender, observations, author_users)
+        yield label if labels.get(sender) != label else None
+        labels[sender] = label
+
+
+def _message_metadata(
+    message: Message, bot_id: int | None, cut: TruncatedThread | None
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"id": message.message_id, "user_id": _sender(message)}
+    if message.reply_to_id is not None:
+        metadata["reply_to"] = message.reply_to_id
+    if message.media_type:
+        metadata["attachment"] = message.media_type
+    # Tool text has no native assistant-role event to carry authorship.
+    if (
+        bot_id is not None
+        and isinstance(message, OriginalMessage)
+        and message.author_id == bot_id
+    ):
+        metadata["role"] = "assistant"
+    if cut is not None:
+        metadata["truncated_thread"] = {
+            "root_id": cut.root_id,
+            "remaining_hops": cut.remaining_hops,
+            "boundary_source_id": _reference(message),
+            **({"source_id": cut.source_id} if cut.source_id is not None else {}),
+        }
+    return metadata
 
 
 def _format_messages(
@@ -80,7 +122,7 @@ def _format_messages(
     truncated_threads: Sequence[TruncatedThread] = (),
     label: str = "Saved group context",
 ) -> list[dict[str, str]]:
-    """Shared chat/roster metadata and compact entries with preserved roles."""
+    """Stable chat metadata and incremental message records with native roles."""
     if not messages:
         return []
     latest = messages[-1]
@@ -99,64 +141,40 @@ def _format_messages(
     result = [
         {
             "role": "user",
-            "text": f"{label} (untrusted data):\nchat: {chat}\n{_users(messages, bot_id, interlocutor_id, author_users or {})}",
+            "text": f"{label}:\nchat: {chat}",
         }
     ]
-    visible = {message.message_id: message for message in messages}
-    cuts = {
-        str(thread.boundary_id): {
-            "root_id": thread.root_id,
-            "remaining_hops": thread.remaining_hops,
-            "boundary_source_id": _reference(visible[thread.boundary_id]),
-            **({"source_id": thread.source_id} if thread.source_id is not None else {}),
-        }
-        for thread in truncated_threads
-        if thread.boundary_id in visible
-    }
-    if cuts:
-        result[0]["text"] += "\n\ntruncated_threads: " + json.dumps(
-            cuts, separators=(",", ":")
-        )
+    cuts = {thread.boundary_id: thread for thread in truncated_threads}
     previous_day: date | None = None
-    previous_offset: str | None = None
-    for index, message in enumerate(messages):
+    for index, (message, author) in enumerate(
+        zip(messages, _authors(messages, bot_id, author_users or {}), strict=True)
+    ):
         if message.sent_at is not None and message.sent_at.utcoffset() is None:
             error_message = "Message send time must include a timezone."
             raise ValueError(error_message)
         local = message.sent_at.astimezone(timezone) if message.sent_at else None
-        offset = local.strftime("%z") if local else None
         lines = []
-        if offset is not None and offset != previous_offset:
-            lines.append(f"{timezone.key} (UTC{offset[:3]}:{offset[3:]})\n")
         if local is None:
             if index == 0 or previous_day is not None:
                 lines.append("Unknown send date")
-        elif local.date() != previous_day or offset != previous_offset:
+        elif local.date() != previous_day:
             lines.append(f"{local:%d %B %Y (%A)}")
-        if index == 0:
-            result[0]["text"] += "\n\n" + "\n".join(lines)
-            result[0]["text"] += (
-                "\n\nmessages: [id,sender,time,text,reply_to?,attachment?]"
-            )
-            lines = []
-        row: list[int | str | None] = [
-            message.message_id,
-            _sender(message),
-            local.strftime("%H:%M:%S") if local else None,
-            message.text,
-        ]
-        if message.reply_to_id is not None or message.media_type:
-            row.append(message.reply_to_id)
-        if message.media_type:
-            row.append(message.media_type)
-        lines.append(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
+        if author:
+            lines.append(author)
+        if index == len(messages) - 1 and type(interlocutor_id) is int:
+            lines.append(f"Interlocutor user id: {interlocutor_id}")
+        metadata = _message_metadata(message, bot_id, cuts.get(message.message_id))
+        lines.append(
+            f"{format_local_time(local) if local else 'Unknown time'} "
+            + json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))
+        )
         result.append({
             "role": "assistant"
             if bot_id is not None and message.author_id == bot_id
             else "user",
-            "text": "\n".join(lines),
+            "text": "\n".join(lines) + "\n" + message.text,
         })
-        previous_day, previous_offset = local.date() if local else None, offset
+        previous_day = local.date() if local else None
     return result
 
 
@@ -224,6 +242,29 @@ class MessageFormatter:
             truncated_threads=truncated_threads,
         )
 
+    def events(
+        self,
+        messages: Sequence[MemoryMessage],
+        *,
+        interlocutor_id: int | None = None,
+        truncated_threads: Sequence[TruncatedThread] = (),
+    ) -> list[ModelRequest | ModelResponse]:
+        """Render selected messages as AG2 events, including the current request.
+
+        Chat metadata is a separate user event; bot messages retain assistant roles.
+        This performs no history reads and does not create or modify a stream.
+        """
+        return [
+            ModelResponse(ModelMessage(item["text"]))
+            if item["role"] == "assistant"
+            else ModelRequest([TextInput(item["text"])])
+            for item in self.context(
+                messages,
+                interlocutor_id=interlocutor_id,
+                truncated_threads=truncated_threads,
+            )
+        ]
+
     def result(
         self, result: dict[str, Any], *, interlocutor_id: int | None = None
     ) -> dict[str, Any]:
@@ -278,7 +319,7 @@ class MessageFormatter:
                         if message.chat_username
                     )
                 ),
-                "text": "\n".join(
+                "text": "\n===\n".join(
                     item["text"]
                     for item in _format_messages(
                         messages,

@@ -1,0 +1,22 @@
+services:
+  preview:
+    build: .
+    command: ["python", "/app/preview/server.py", "--host", "0.0.0.0"]
+    environment:
+      DATABASE_URL: postgresql://dashulya:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/dashulya
+      BOT_TOKEN: ${BOT_TOKEN:-}
+      OWNER_USER_ID: ${OWNER_USER_ID:-0}
+      OWNER_AUTHOR_IDS: ${OWNER_AUTHOR_IDS:-}
+      BOT_TIMEZONE: ${BOT_TIMEZONE:-Europe/Moscow}
+      PYTHONPATH: /app/src
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./src:/app/src:ro
+      - ./preview:/app/preview:ro
+    ports:
+      - "127.0.0.1:8765:8765"
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy

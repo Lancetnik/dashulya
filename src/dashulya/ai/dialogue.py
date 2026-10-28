@@ -8,18 +8,16 @@ from typing import cast
 
 from ag2 import Agent, MemoryStream
 from ag2.events import (
-    BaseEvent,
     BinaryInput,
     BinaryType,
     ImageInput,
     Input,
-    ModelMessage,
     ModelRequest,
     ModelResponse,
     TextInput,
 )
 
-from dashulya.ai.message_format import MessageFormatter
+from dashulya.ai.message_format import MessageFormatter, format_local_time
 from dashulya.ai.tools.reactions import ReactionTurn
 from dashulya.domain.memory import (
     ChatHistory,
@@ -77,33 +75,30 @@ class Dialogue:
         async with self._conversation(key).delivery_lock:
             yield
 
-    async def _group_history(self, key: ConversationKey, message_id: int) -> ReplyContext:
+    async def select_context(
+        self,
+        key: ConversationKey,
+        message_id: int,
+        *,
+        current: MemoryMessage | None = None,
+        limit: int = 20,
+        parent_hops: int = 5,
+    ) -> ReplyContext:
+        """Select originals without formatting or creating an agent stream.
+
+        When supplied, current replaces its saved copy and appears exactly once,
+        last. Saved attachment and sender metadata survive the replacement.
+        """
         if self._history is None:
             error_message = "Group replies require a chat history store."
             raise ValueError(error_message)
-        return await self._history.context(key, message_id, limit=20, parent_hops=5)
-
-    def _text(
-        self, text: str, *, sent_at: datetime, user_id: int | None, user_name: str
-    ) -> str:
-        if sent_at.utcoffset() is None:
-            error_message = "Message send time must include a timezone."
-            raise ValueError(error_message)
-        local_time = sent_at.astimezone(self._timezone)
-        offset = local_time.strftime("%z")
-        return (
-            f"Sent at: {local_time:%d %B %Y (%A) %H:%M:%S}\n"
-            f"Timezone: {self._timezone.key} (UTC{offset[:3]}:{offset[3:]})\n"
-            f"{user_name} (Telegram user ID: {user_id}; interlocutor):\n{text}"
+        context = await self._history.context(
+            key, message_id, limit=limit, parent_hops=parent_hops
         )
-
-    async def _group_input(
-        self, key: ConversationKey, current: MemoryMessage
-    ) -> tuple[MemoryStream, str, tuple[MemoryMessage, ...]]:
-        context = await self._group_history(key, current.message_id)
-        originals = context.messages
+        if current is None:
+            return context
         saved = next(
-            (item for item in originals if item.message_id == current.message_id),
+            (item for item in context.messages if item.message_id == current.message_id),
             current,
         )
         current = replace(
@@ -116,22 +111,46 @@ class Dialogue:
             if current.reply_to_id is not None
             else saved.reply_to_id,
         )
-        messages = [item for item in originals if item.message_id != current.message_id]
-        messages.append(current)
-        rendered = self._formatter.context(
-            messages,
+        return replace(
+            context,
+            messages=(
+                *(
+                    item
+                    for item in context.messages
+                    if item.message_id != current.message_id
+                ),
+                current,
+            ),
+        )
+
+    def _text(
+        self, text: str, *, sent_at: datetime, user_id: int | None, user_name: str
+    ) -> str:
+        if sent_at.utcoffset() is None:
+            error_message = "Message send time must include a timezone."
+            raise ValueError(error_message)
+        local_time = sent_at.astimezone(self._timezone)
+        return (
+            f"Sent at: {format_local_time(local_time, include_date=True)}\n"
+            f"{user_name} (Telegram user ID: {user_id}; interlocutor):\n{text}"
+        )
+
+    async def _group_input(
+        self, key: ConversationKey, current: MemoryMessage
+    ) -> tuple[MemoryStream, str, tuple[MemoryMessage, ...]]:
+        context = await self.select_context(key, current.message_id, current=current)
+        events = self._formatter.events(
+            context.messages,
             interlocutor_id=current.author_id,
             truncated_threads=context.truncated_threads,
         )
-        events: list[BaseEvent] = []
-        for item in rendered[:-1]:
-            if item["role"] == "assistant":
-                events.append(ModelResponse(ModelMessage(item["text"])))
-            else:
-                events.append(ModelRequest([TextInput(item["text"])]))
+        request = events.pop()
+        assert isinstance(request, ModelRequest)
+        current_input = request.parts[0]
+        assert isinstance(current_input, TextInput)
         stream = MemoryStream()
         await stream.history.replace(events)
-        return stream, rendered[-1]["text"], tuple(messages)
+        return stream, current_input.content, context.messages
 
     async def _trim_images(self, stream: MemoryStream, incoming_bytes: int) -> None:
         if incoming_bytes > self._max_image_bytes:
@@ -202,7 +221,7 @@ class Dialogue:
         self, key: ConversationKey, *, through_message_id: int | None = None
     ) -> list[dict[str, str]]:
         if through_message_id is not None:
-            context = await self._group_history(key, through_message_id)
+            context = await self.select_context(key, through_message_id)
             return self._formatter.context(
                 [
                     message
@@ -301,7 +320,7 @@ class Dialogue:
                     *image_inputs,
                     stream=stream,
                     variables={"user_id": user_id, "chat_id": key[0]},
-                    dependencies={MemoryAccess: access, ReactionTurn: reactions},
+                    dependencies={"memory_access": access, "reaction_turn": reactions},
                 )
                 result = await reply.content()
             if result is not None and not result.text.strip() and reactions.attempted:

@@ -282,7 +282,7 @@ class GroupContextTests(PostgresTestCase):
             if isinstance(part, TextInput)
         ]
         self.assertIn("We were discussing cats", "\n".join(requests))
-        self.assertIn("99: Boris", requests[0])
+        self.assertIn("User 99: Boris", requests[1])
         self.assertEqual(group_rows(requests[-1])[-1][4], 3)
         earlier_bot = [
             event

@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -28,9 +29,35 @@ def reply_json(text: str, reply_to_message_id: int | None = None) -> str:
     })
 
 
+def group_records(text: str) -> list[dict[str, Any]]:
+    """Read timestamp/JSON headers and source bodies from formatted evidence."""
+    records = []
+    pattern = (
+        r'^(\d{2}:\d{2}:\d{2}(?: \(UTC[+-]\d{2}:\d{2}\))?|Unknown time) (\{"id":.*\})\n'
+    )
+    for block in text.split("\n===\n"):
+        matches = list(re.finditer(pattern, block, re.MULTILINE))
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(block)
+            records.append({
+                **json.loads(match[2]),
+                "time": None if match[1] == "Unknown time" else match[1],
+                "text": block[match.end() : end],
+            })
+    return records
+
+
 def group_rows(text: str) -> list[list[Any]]:
-    """Read context data rows while ignoring shared roster/calendar headings."""
-    return [json.loads(line) for line in text.splitlines() if line.startswith("[")]
+    """Normalize formatted records for existing context-selection assertions."""
+    rows = []
+    for record in group_records(text):
+        row = [record["id"], record["user_id"], record["time"], record["text"]]
+        if "reply_to" in record or "attachment" in record:
+            row.append(record.get("reply_to"))
+        if "attachment" in record:
+            row.append(record["attachment"])
+        rows.append(row)
+    return rows
 
 
 class RecorderOverride(Provider):

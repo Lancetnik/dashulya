@@ -1,5 +1,4 @@
 import asyncio
-import json
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -10,7 +9,7 @@ from dashulya.ai.message_format import MessageFormatter
 from dashulya.domain.memory import MemoryAccess, OriginalMessage
 from dashulya.memory.history import CanonicalHistory
 from dashulya.memory.store import MessageStore
-from tests.support import group_rows
+from tests.support import group_records, group_rows
 
 GROUP = -100123
 NOW = datetime(2026, 10, 25, 12, tzinfo=UTC)
@@ -40,14 +39,11 @@ def original(number: int, **changes: Any) -> OriginalMessage:
 
 
 def cut_header(text: str) -> dict[str, Any]:
-    result: dict[str, Any] = json.loads(
-        next(
-            line.removeprefix("truncated_threads: ")
-            for line in text.splitlines()
-            if line.startswith("truncated_threads: ")
-        )
-    )
-    return result
+    return {
+        str(record["id"]): record["truncated_thread"]
+        for record in group_records(text)
+        if "truncated_thread" in record
+    }
 
 
 class HistoryReplyHopsTests(unittest.IsolatedAsyncioTestCase):

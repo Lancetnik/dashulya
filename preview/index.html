@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashulya · Context explorer</title>
+  <style>
+    :root { color-scheme: light; --ink:#252738; --muted:#787b8c; --line:#e6e7ed; --accent:#7058d7; --violet:#f0ecff; --orange:#b97928; --paper:#fafafc; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-size:14px; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); height:100dvh; overflow:hidden; }
+    button { font:inherit; cursor:pointer; }
+    button { background:white; color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
+    button:hover { border-color:#b0a3e7; background:#f8f6ff; }
+    button:disabled { cursor:default; opacity:.5; }
+    :focus-visible { outline:3px solid #a693f0; outline-offset:3px; }
+    [hidden] { display:none !important; }
+    #notice { position:fixed; z-index:5; top:44px; left:50%; transform:translateX(-50%); width:min(600px,90vw); background:#fff5e5; color:#82541d; border:1px solid #f1d9b6; padding:10px 13px; border-radius:8px; font-size:12px; }
+    main { height:100%; display:grid; grid-template-columns:1fr 1fr; overflow:hidden; background:white; }
+    .pane { display:flex; flex-direction:column; min-width:0; min-height:0; }
+    .pane + .pane { border-left:1px solid #dddfe8; }
+    .pane-head { min-height:36px; flex-shrink:0; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 12px; background:white; border-bottom:1px solid var(--line); }
+    .pane-title { font-size:12px; font-weight:600; display:flex; gap:8px; align-items:center; min-width:0; white-space:nowrap; }
+    #chat-title { overflow:hidden; text-overflow:ellipsis; }
+    .pane-sub { font-size:10px; font-weight:400; color:var(--muted); }
+    .context-parameters { display:flex; align-items:center; gap:10px; margin-left:auto; flex-shrink:0; }
+    .context-parameters label { display:flex; align-items:center; gap:5px; font-size:10px; color:var(--muted); white-space:nowrap; }
+    .context-parameters input { width:50px; height:26px; padding:3px 4px 3px 6px; border:1px solid var(--line); border-radius:5px; color:var(--ink); background:white; font:inherit; font-variant-numeric:tabular-nums; }
+    .context-parameters input:invalid { border-color:#c57955; }
+    .tabs { display:flex; gap:3px; padding:2px; background:#f3f3f7; border-radius:6px; flex-shrink:0; }
+    .tabs button { font-size:10px; border:0; padding:4px 8px; background:transparent; color:var(--muted); }
+    .tabs button[aria-selected="true"] { background:white; color:var(--ink); box-shadow:0 1px 3px #20202b12; }
+    .legend { display:flex; gap:10px; font-size:9px; color:var(--muted); flex-shrink:0; }
+    .legend span { display:flex; align-items:center; gap:5px; }
+    .swatch { width:7px; height:7px; border-radius:2px; background:var(--accent); }
+    .swatch.recent { background:#c7b9f2; }
+    .swatch.parent { background:#d8a35b; }
+    #chat-scroll { flex:1; min-height:0; overflow:auto; background-color:#e8efea; background-image:radial-gradient(#a4bca622 .9px,transparent .9px); background-size:15px 15px; padding:10px 12px 16px; }
+    .load-wrap { text-align:center; margin:2px 0 15px; }
+    #older { border-radius:20px; font-size:11px; padding:7px 15px; background:#ffffffcb; }
+    .day { width:max-content; margin:16px auto 15px; padding:5px 12px; border-radius:15px; color:#61716a; background:#d8e2db; font-size:10px; font-weight:500; }
+    .message { display:flex; gap:9px; align-items:flex-end; margin:0 0 11px; cursor:pointer; border-radius:13px; scroll-margin:20px; }
+    .message.self { flex-direction:row-reverse; }
+    .avatar { flex-shrink:0; width:29px; height:29px; border-radius:50%; display:grid; place-items:center; font-size:10px; font-weight:650; color:white; background:var(--avatar); margin-bottom:2px; }
+    .bubble { min-width:90px; max-width:calc(100% - 64px); border-radius:12px 12px 12px 3px; padding:9px 11px 6px; background:white; border:1px solid transparent; box-shadow:0 1px 2px #2b403014; }
+    .self .bubble { border-color:#9cc9bb; border-radius:12px 12px 3px 12px; }
+    .self .avatar { background:#1b806e; border-radius:8px; }
+    .self .author { color:#126350; }
+    .agent-badge { display:inline-block; margin-left:6px; padding:2px 5px; border-radius:4px; background:#1b806e; color:white; font-size:8px; font-weight:700; letter-spacing:.5px; vertical-align:middle; }
+    .message:hover .bubble { box-shadow:0 0 0 2px #b6a6ed; }
+    .message[data-selection="recent"] .bubble { border-left:3px solid #baa9ec; background:#f7f4ff; }
+    .message[data-selection="parent"] .bubble { border-left:3px solid #d9a054; background:#fffaf0; }
+    .message[data-selection="current"] .bubble { border:2px solid var(--accent); background:#f5f1ff; box-shadow:0 2px 9px #7058d71c; }
+    .message.self .bubble { background:#e1f3ed; border-right:4px solid #1b806e; }
+    .message.outside-context { opacity:.5; }
+    .message.outside-context:hover,.message.outside-context:focus-visible { opacity:.8; }
+    .message.flash .bubble { box-shadow:0 0 0 3px #a995ec; }
+    .author { font-size:11px; font-weight:650; color:var(--author); margin-bottom:5px; }
+    .handle { font-size:10px; font-weight:400; opacity:.65; margin-left:4px; }
+    .body { font-size:12px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .message-footer { display:flex; justify-content:flex-end; align-items:center; gap:8px; color:#8b9590; font-size:9px; margin-top:5px; }
+    .selection-label { margin-right:auto; color:var(--accent); font-size:9px; font-weight:600; }
+    [data-selection="parent"] .selection-label { color:var(--orange); }
+    .reply-quote { display:block; text-align:left; border:0; border-left:2px solid #a7baa8; background:#edf2ed; border-radius:2px 5px 5px 2px; padding:5px 8px; margin:0 0 7px; max-width:100%; font-size:10px; color:#69856b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .media { font-size:11px; padding:15px 20px; margin-bottom:5px; background:#e8eae9; color:#7e8883; border-radius:7px; text-align:center; }
+    .media small { display:block; margin-top:5px; font-size:9px; opacity:.7; }
+    .context-stats { display:flex; gap:9px; align-items:center; color:var(--muted); font-size:10px; white-space:nowrap; margin-left:auto; }
+    .context-stats strong { color:var(--ink); font-weight:600; }
+    #context-scroll { overflow:auto; flex:1; min-height:0; padding:10px 12px 16px; background:#fcfcfe; }
+    .empty { height:100%; min-height:220px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; color:var(--muted); padding:30px; }
+    .empty-icon { font:30px Georgia,serif; border:1px solid #e4dfef; background:#f2eefb; color:#9a89cc; border-radius:15px; width:64px; height:64px; display:grid; place-items:center; margin-bottom:20px; }
+    .empty strong { font-size:15px; font-weight:500; color:#5c5b70; margin-bottom:8px; }
+    .empty p { font-size:12px; line-height:1.7; margin:0; max-width:270px; }
+    .event { background:white; border:1px solid var(--line); border-radius:9px; margin-bottom:11px; overflow:hidden; }
+    .event.assistant { background:#eff8f4; border-color:#9bcabb; border-left:4px solid #1b806e; }
+    .event.assistant .event-head { background:#d8eee4; border-bottom-color:#bddbd0; }
+    .event.assistant pre { color:#1d5043; }
+    .event-head { display:flex; align-items:center; gap:8px; padding:8px 11px; border-bottom:1px solid #f0f0f5; font-size:10px; }
+    .role { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; border-radius:4px; background:#f1eff8; color:#78669e; padding:3px 5px; }
+    .role.assistant { background:#1b806e; color:white; font-weight:650; }
+    .event-kind { color:#9091a0; font-size:9px; }
+    .event-size { margin-left:auto; color:var(--muted); font-size:9px; white-space:nowrap; flex-shrink:0; font-variant-numeric:tabular-nums; }
+    .event-source { padding:0; background:none; border:0; font-size:10px; color:var(--accent); flex-shrink:0; }
+    .event-label { color:#a09ba9; font-size:9px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    pre { margin:0; padding:12px; font:11px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; color:#4e5066; tab-size:2; }
+    .event.current { border-color:#c4b5ef; }
+    .event.parent { border-color:#ead6b9; }
+    .event.current .event-head { background:#f7f3ff; }
+    .cut-note { background:#fff7e9; border:1px solid #f1dfbf; color:#88632e; border-radius:8px; padding:10px 12px; font-size:11px; line-height:1.6; margin-bottom:13px; }
+    .json-tools { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:11px; color:var(--muted); }
+    #json { border:1px solid var(--line); background:white; border-radius:9px; }
+    @media (max-width:1300px) { .context-stats span:nth-child(n+3) { display:none; } }
+    @media (max-width:1100px) { .legend { display:none; } .context-stats span:nth-child(n+2) { display:none; } }
+    @media (max-width:620px) { main { grid-template-columns:1fr; grid-template-rows:1fr 1fr; } .pane + .pane { border-left:0; border-top:1px solid var(--line); } .handle { display:none; } .empty { min-height:0; } }
+  </style>
+</head>
+<body>
+  <div id="notice" role="alert" hidden></div>
+  <main>
+    <section class="pane" aria-label="Original Telegram messages">
+      <div class="pane-head"><div class="pane-title" id="chat-title">Telegram chat</div><div class="context-parameters" aria-label="Reply context parameters"><label title="Recent messages up to and including the selected message. No upper limit.">Recent ↑ <input id="context-limit" type="number" min="1" step="1" value="20" required aria-label="Number of recent messages, including the selected message"></label><label title="Reply-parent hops from each recent message. No upper limit. Zero disables parent expansion.">Hops <input id="context-hops" type="number" min="0" step="1" value="5" required aria-label="Number of reply-parent hops"></label></div><div class="legend"><span><i class="swatch"></i>Current</span><span><i class="swatch recent"></i>Recent</span><span><i class="swatch parent"></i>Parent</span></div></div>
+      <div id="chat-scroll"><div class="load-wrap"><button id="older" hidden>↑ Load older messages</button></div><div id="messages"><div class="empty"><strong>Loading saved messages…</strong></div></div></div>
+    </section>
+    <section class="pane" aria-label="Agent reply context">
+      <div class="pane-head"><div class="pane-title">Agent context <span id="selection-info" class="pane-sub">Select a message</span></div><div id="stats" class="context-stats"></div><div class="tabs" role="tablist" aria-label="Context view"><button id="events-tab" role="tab" aria-selected="true" aria-controls="events-view">Events</button><button id="json-tab" role="tab" aria-selected="false" aria-controls="json-view">JSON</button></div></div>
+      <div id="context-scroll" aria-live="polite">
+        <div id="empty-context" class="empty"><div class="empty-icon">↖</div><strong>A conversation, through the agent’s eyes</strong><p>Click any message to build its reply context. Earlier reply parents can appear beyond the recent window.</p></div>
+        <div id="events-view" role="tabpanel" aria-labelledby="events-tab" hidden></div>
+        <div id="json-view" role="tabpanel" aria-labelledby="json-tab" hidden><div class="json-tools"><span>Serialized AG2 events</span><button id="copy" disabled>Copy JSON</button></div><pre id="json"></pre></div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const $ = id => document.getElementById(id);
+    const state = { messages:[], chat:null, topic:"", context:null, current:null, timezone:"Europe/Moscow", view:"events", epoch:0, contextRequest:null, loading:false, limit:20, parentHops:5 };
+    let parameterTimer;
+    const labels = { current:"Current request", recent:"Recent window", parent:"Reply parent" };
+    function element(tag, className, text) { const node=document.createElement(tag); if(className) node.className=className; if(text!==undefined) node.textContent=text; return node; }
+    function notice(text="") { $("notice").hidden=!text; $("notice").textContent=text; }
+    function time(value, options) { return new Intl.DateTimeFormat("en-GB", {timeZone:state.timezone,...options}).format(new Date(value)); }
+    function characterCount(text) { let count=0; for(const character of text) count++; return count; }
+    function params(extra={}) { const p=new URLSearchParams({chat_id:state.chat.chat_id,...extra}); if(state.topic) p.set("topic_id",state.topic); return p; }
+    async function api(path, query, signal) { const response=await fetch(path+(query?"?"+query:""), {signal}); const result=await response.json(); if(!response.ok) throw new Error(result.error||"Could not load saved messages."); return result; }
+    function busy(value) { state.loading=value; $("older").disabled=value; }
+    function renderChat() {
+      const fragment=document.createDocumentFragment(); let day="";
+      const lookup=new Map(state.messages.map(message=>[message.id,message]));
+      for(const message of state.messages) {
+        const date=time(message.sent_at,{day:"numeric",month:"long",year:"numeric"});
+        if(date!==day) { fragment.append(element("div","day",date)); day=date; }
+        const item=element("article","message"+(message.is_self?" self":"")); item.dataset.id=message.id; item.tabIndex=0; item.setAttribute("role","button"); item.setAttribute("aria-label",`${message.is_self?"Agent message":"Message"} ${message.id} from ${message.author}`);
+        const hue=Math.abs(Number(message.author_id??message.id)*47)%360;
+        item.style.setProperty("--avatar",`hsl(${hue} 26% 61%)`); item.style.setProperty("--author",`hsl(${hue} 33% 43%)`);
+        const initials=message.author.trim().split(/\s+/).slice(0,2).map(part=>[...part][0]).join("").toUpperCase()||"?";
+        const avatar=element("div","avatar",initials); avatar.setAttribute("aria-hidden","true"); item.append(avatar);
+        const bubble=element("div","bubble"); const author=element("div","author",message.author);
+        if(message.username) author.append(element("span","handle","@"+message.username.replace(/^@/,""))); if(message.is_self) author.append(element("span","agent-badge","AGENT")); bubble.append(author);
+        if(message.reply_to_id) { const parent=lookup.get(message.reply_to_id); const quote=element("button","reply-quote",`↳ #${message.reply_to_id} · ${parent?parent.author+": "+(parent.text||"Attachment"):"Reply to an earlier message"}`); quote.type="button"; quote.dataset.jump=message.reply_to_id; bubble.append(quote); }
+        if(message.media_type) { const media=element("div","media","▧ "+message.media_type); media.append(element("small","","Saved attachment · media bytes are not loaded")); bubble.append(media); }
+        if(message.text) bubble.append(element("div","body",message.text));
+        if(!message.text&&!message.media_type) bubble.append(element("div","body","[Empty saved message]"));
+        const footer=element("div","message-footer"); footer.append(element("span","selection-label"),element("span","","#"+message.id),element("span","",time(message.sent_at,{hour:"2-digit",minute:"2-digit"}))); bubble.append(footer); item.append(bubble); fragment.append(item);
+      }
+      if(!state.messages.length) { const empty=element("div","empty"); empty.append(element("strong","","No saved messages in this conversation")); fragment.append(empty); }
+      $("messages").replaceChildren(fragment); highlightSelection();
+    }
+    function highlightSelection() {
+      const selected=new Map((state.context?.messages||[]).map(message=>[message.id,message.selection]));
+      document.querySelectorAll(".message").forEach(item=>{ const id=Number(item.dataset.id); const kind=id===state.current?"current":selected.get(id)||""; item.dataset.selection=kind; item.classList.toggle("outside-context",state.context!==null&&!selected.has(id)); item.setAttribute("aria-pressed",String(id===state.current)); item.querySelector(".selection-label").textContent=labels[kind]||""; });
+    }
+    async function loadMessages({older=false,around=null}={}) {
+      const epoch=state.epoch; const scroll=$("chat-scroll"); const oldHeight=scroll.scrollHeight; const oldTop=scroll.scrollTop;
+      busy(true); notice();
+      try {
+        const extra=around?{around_id:around}:older?{before_id:state.messages[0].id}:{};
+        const result=await api("/api/messages",params(extra)); if(epoch!==state.epoch) return;
+        state.messages=older?[...result.messages,...state.messages]:result.messages;
+        $("older").hidden=!result.has_older; renderChat();
+        scroll.scrollTop=older?scroll.scrollHeight-oldHeight+oldTop:scroll.scrollHeight;
+      } catch(error) { if(epoch===state.epoch) notice(error.message); }
+      finally { if(epoch===state.epoch) busy(false); }
+    }
+    async function selectMessage(id) {
+      clearTimeout(parameterTimer);
+      const epoch=state.epoch; state.contextRequest?.abort(); const request=new AbortController(); state.contextRequest=request; state.current=id; state.context=null; highlightSelection(); notice();
+      $("selection-info").textContent=`#${id}…`; $("stats").replaceChildren(); $("events-view").hidden=true; $("json-view").hidden=true; $("empty-context").hidden=false;
+      try {
+        const result=await api("/api/context",params({message_id:id,limit:state.limit,parent_hops:state.parentHops}),request.signal); if(epoch!==state.epoch||request.signal.aborted) return;
+        state.context=result; highlightSelection(); renderContext();
+      } catch(error) { if(error.name!=="AbortError"&&epoch===state.epoch) { notice(error.message); $("selection-info").textContent=`#${id} · failed`; } }
+    }
+    function renderContext() {
+      const result=state.context; if(!result) return;
+      const sizes=result.events.map(event=>characterCount(event.text));
+      const totalCharacters=sizes.reduce((total,size)=>total+size,0);
+      const recent=result.messages.filter(message=>message.selection!=="parent").length; const parents=result.messages.length-recent;
+      $("selection-info").textContent=`#${result.message_id}`;
+      $("selection-info").title=`Chat ${result.key[0]}${result.key[1]===null?" · whole chat":" · topic "+result.key[1]} · ${result.parameters.limit} recent · ${result.parameters.parent_hops} hops · ${result.elapsed_ms} ms`;
+      const stats=$("stats"); stats.replaceChildren(); for(const [count,label] of [[totalCharacters,"chars"],[result.messages.length,"messages"],[recent,"recent"],[parents,"parents"],[result.events.length,"events"]]) { const part=element("span"); part.append(element("strong","",count.toLocaleString("en-US")),document.createTextNode(" "+label)); if(label==="chars") { part.id="total-characters"; part.title="Characters in all formatted event text, including spaces, newlines and shared metadata."; } stats.append(part); }
+      const fragment=document.createDocumentFragment();
+      if(result.truncated_threads.length) fragment.append(element("div","cut-note",`${result.truncated_threads.length} reply chain(s) extend past the ${result.parameters.parent_hops}-hop limit. Navigation metadata appears in the boundary messages.`));
+      const kinds=new Map(result.messages.map(message=>[message.id,message.selection]));
+      for(const [index,event] of result.events.entries()) { const card=element("div","event "+event.role+" "+(kinds.get(event.message_id)||"")); const head=element("div","event-head"); const size=element("span","event-size",sizes[index].toLocaleString("en-US")+" chars"); size.title="Characters in this event's formatted text, including spaces and newlines."; head.append(element("span","role "+event.role,event.role),element("span","event-kind",event.type),size); if(event.message_id!==null) { const source=element("button","event-source","#"+event.message_id+" ↗"); source.dataset.reveal=event.message_id; head.append(source); } else head.append(element("span","event-label","CHAT")); card.append(head,element("pre","",event.text)); fragment.append(card); }
+      $("events-view").replaceChildren(fragment); $("json").textContent=JSON.stringify(result.raw_events,null,2); $("copy").disabled=false; $("empty-context").hidden=true; setView(state.view); $("context-scroll").scrollTop=0;
+    }
+    function setView(view) { state.view=view; for(const tab of ["events","json"]) { $(tab+"-tab").setAttribute("aria-selected",String(tab===view)); $(tab+"-view").hidden=!state.context||tab!==view; } }
+    async function revealMessage(id,select=false) {
+      const epoch=state.epoch;
+      if(!state.messages.some(message=>message.id===id)) await loadMessages({around:id});
+      if(epoch!==state.epoch) return;
+      const item=$("messages").querySelector(`[data-id="${id}"]`); if(!item) { notice(`Message #${id} is not saved in this chat/topic.`); return; }
+      item.scrollIntoView({block:"center"}); item.classList.add("flash"); setTimeout(()=>item.classList.remove("flash"),1200); if(select) await selectMessage(id);
+    }
+    $("older").addEventListener("click",()=>loadMessages({older:true}));
+    for(const id of ["context-limit","context-hops"]) $(id).addEventListener("input",()=>{
+      clearTimeout(parameterTimer);
+      if(!$("context-limit").checkValidity()||!$("context-hops").checkValidity()) return;
+      state.limit=$("context-limit").valueAsNumber; state.parentHops=$("context-hops").valueAsNumber;
+      if(state.current!==null) { state.contextRequest?.abort(); parameterTimer=setTimeout(()=>selectMessage(state.current),180); }
+    });
+    $("messages").addEventListener("click",event=>{ const quote=event.target.closest("[data-jump]"); if(quote) { revealMessage(Number(quote.dataset.jump),true); return; } const item=event.target.closest(".message"); if(item) selectMessage(Number(item.dataset.id)); });
+    $("messages").addEventListener("keydown",event=>{ if((event.key==="Enter"||event.key===" ")&&event.target.matches(".message")) { event.preventDefault(); selectMessage(Number(event.target.dataset.id)); } });
+    $("events-view").addEventListener("click",event=>{ const button=event.target.closest("[data-reveal]"); if(button) revealMessage(Number(button.dataset.reveal)); });
+    for(const view of ["events","json"]) $(view+"-tab").addEventListener("click",()=>setView(view));
+    $("copy").addEventListener("click",async()=>{ try { await navigator.clipboard.writeText($("json").textContent); $("copy").textContent="Copied ✓"; setTimeout(()=>$("copy").textContent="Copy JSON",1400); } catch { notice("Clipboard unavailable. Select and copy the JSON text below."); } });
+    async function init() {
+      try { const data=await api("/api/chats"); state.timezone=data.timezone;
+        if(!data.chats.length) { $("messages").replaceChildren(element("div","empty","No numerically bound group messages in PostgreSQL yet.")); return; }
+        const query=new URLSearchParams(location.search);
+        state.chat=query.has("chat_id")?data.chats.find(chat=>String(chat.chat_id)===query.get("chat_id")):data.chats.reduce((largest,chat)=>chat.message_count>largest.message_count?chat:largest);
+        if(!state.chat) throw new Error("This group chat is not saved in PostgreSQL.");
+        state.topic=query.get("topic_id")||"";
+        $("chat-title").textContent=state.chat.title||"Unnamed group"; $("chat-title").title=`${state.chat.message_count.toLocaleString()} saved messages · ${state.timezone}`;
+        await loadMessages();
+      } catch(error) { $("messages").replaceChildren(element("div","empty","Could not load saved messages.")); notice(error.message); }
+    }
+    init();
+  </script>
+</body>
+</html>

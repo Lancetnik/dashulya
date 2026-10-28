@@ -1,8 +1,12 @@
-from ag2 import Agent, Context
+from collections.abc import Callable
+from typing import Annotated
+
+from ag2 import Agent, Context, Inject
 from ag2.middleware import Middleware
 from aiogram import Bot
 from dishka import AsyncContainer, Provider, provide
 from dishka_ag2 import AG2Scope, DishkaAsyncMiddleware
+from fast_depends import inject
 
 from dashulya.ai.addressing import GroupAddressing
 from dashulya.ai.agents.factory import create_decision_agent, create_reply_agent
@@ -22,6 +26,27 @@ from dashulya.domain.memory import (
 )
 from dashulya.domain.messages import Reply
 from dashulya.main.config import IMAGE_MAX_BYTES, Settings
+
+
+def _validate_memory_access(
+    access: Annotated[MemoryAccess | None, Inject("memory_access", default=None)],
+) -> MemoryAccess:
+    error_message = "Memory tools require trusted conversation access."
+    if type(access) is not MemoryAccess:
+        raise ValueError(error_message)
+    fields = vars(access)
+    if (
+        type(fields["chat_id"]) is not int
+        or type(fields["is_private"]) is not bool
+        or access.chat_id == 0
+        or access.is_private != (access.chat_id > 0)
+    ):
+        raise ValueError(error_message)
+    return access
+
+
+# Dishka providers are not called by AG2, so resolve their AG2 annotations here.
+_memory_access: Callable[..., MemoryAccess] = inject(_validate_memory_access, cast=False)
 
 
 class AgentProvider(Provider):
@@ -45,10 +70,11 @@ class AgentProvider(Provider):
 
     @provide
     def decision_agent(
-        self, models: AgentModels, container: AsyncContainer
+        self, models: AgentModels, container: AsyncContainer, settings: Settings
     ) -> Agent[bool]:
         return create_decision_agent(
             models.decision,
+            timezone=settings.bot_timezone,
             middleware=[Middleware(DishkaAsyncMiddleware, container=container)],
         )
 
@@ -62,6 +88,7 @@ class AgentProvider(Provider):
     ) -> Agent[Reply]:
         return create_reply_agent(
             models.reply,
+            timezone=settings.bot_timezone,
             tools=[
                 search_memory,
                 chat_history,
@@ -73,19 +100,7 @@ class AgentProvider(Provider):
 
     @provide(scope=AG2Scope.SESSION)
     def memory_access(self, context: Context) -> MemoryAccess:
-        access = context.dependencies.get(MemoryAccess)
-        error_message = "Memory tools require trusted conversation access."
-        if type(access) is not MemoryAccess:
-            raise ValueError(error_message)
-        fields = vars(access)
-        if (
-            type(fields["chat_id"]) is not int
-            or type(fields["is_private"]) is not bool
-            or access.chat_id == 0
-            or access.is_private != (access.chat_id > 0)
-        ):
-            raise ValueError(error_message)
-        return access
+        return _memory_access(__ctx__=context)
 
     @provide(scope=AG2Scope.SESSION)
     def scoped_memory(

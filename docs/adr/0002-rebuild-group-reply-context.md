@@ -39,29 +39,46 @@ first visible or first available message. No marker is needed when the root ends
 exactly at the limit or another seed already supplies the missing parent.
 Root references add neither message text nor permitted Telegram reply targets.
 
-Render one shared users roster as `id: name (@username, bot, self, interlocutor)`, omitting
-unavailable handles and flags. A bot marker requires an unambiguous known flag;
-unmarked senders make no human/bot claim. Self identifies this assistant.
-Interlocutor identifies the current request's author by numeric Telegram ID,
-including their historical messages. Address them in the second person unless
-quoting or explicitly asked to reply to another participant. This marker is
-passed per rendering call and never stored on the shared formatter.
+Keep one stable user-role chat metadata event, then one event per original.
+Declare each sender as `User <id>: name (@username, bot, author_user=<id>)` in
+their first selected message, omitting unavailable handles and flags. Additional
+aliases or flag changes are declared where first observed, using only observations
+up to that message; later observations never rewrite an earlier declaration.
+A bot marker requires an unambiguous known flag; unmarked senders make no
+human/bot claim. Omit this assistant's declaration; its native assistant role
+already identifies it. Put `Interlocutor user id: <id>` in the metadata of
+only the last rendered message. It identifies the current request's author,
+independently of that record's sender, including in retrieved evidence.
+Address that person in the second person unless quoting or explicitly asked to
+reply to another participant. The ID is passed per rendering call and never
+stored on the shared formatter.
 Explicit author bindings may connect a channel or legacy sender ID to that
 person: show `author_user=<user ID>` and preserve the original sender identity.
 Such a binding affects narration only; it does not authorize that sender, merge
 stored sources or imply authorship merely from owning a channel.
-Group entries under local day headings and a timezone/UTC-offset heading; emit
-another heading only when its day or offset changes. Declare message columns
-once: `[id,sender,time,text,reply_to?,attachment?]`. Each entry is one JSON array;
-omit absent trailing columns and use null only before a later optional value.
-Sender remains the actual numeric ID, or a distinct local unknown reference.
-JSON encoding preserves exact text and prevents newlines from creating rows.
-The roster is a separate user-role metadata input, not a Telegram
-message or reply target; actual bot messages retain the assistant API role.
+Group entries under local day headings; emit another heading when the day changes.
+Declare `BOT_TIMEZONE` in both agents' system prompts, keeping the configured IANA
+zone out of user context and tool evidence. Timestamp conversion still uses that
+zone. Add a numeric UTC offset to a repeated local hour's time field, even when
+only one occurrence is selected, so daylight-saving folds remain unambiguous.
+This keeps shared configuration in the system prompt without repeating it in
+each context block. Put each day heading in its first message, followed by any
+author declaration, the optional final interlocutor marker, and a line with local
+time and JSON metadata: `id`, `user_id`, optional `reply_to` and `attachment`.
+Follow that line with the exact original text, preserving newlines and quotes
+without JSON escaping. Sender remains the actual numeric ID, or a distinct local
+unknown reference. The shared system prompt defines this record contract for
+reply and addressing agents. Native event boundaries preserve original roles.
+Attach `truncated_thread` navigation to its boundary message's JSON, rather than
+aggregating it in the shared prefix. These incremental declarations keep
+unchanged leading messages stable when later participants, dates or interlocutors
+change; sliding selection and edited originals can still change the prefix.
 Unknown handles are omitted, unknown numeric identities remain distinct, and
 observed aliases remain visible. Uncertain bot flags are not classified. Memory
-tool results use this same rendering, grouped by source chat,
-with source references preserving citations and excerpt navigation separately.
+tool results use this same rendering, grouped by source chat, with `===` between
+records and `role: assistant` in this bot's message metadata because tool text
+has no native assistant event. Source references preserve citations and excerpt
+navigation separately. Record-looking source text remains untrusted evidence.
 Tool rows remain evidence rather than permitted Telegram reply targets. Private
 user input retains its independent formatting.
 

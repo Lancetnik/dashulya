@@ -10,6 +10,7 @@ dependencies = [
     "aiogram>=3.31,<4",
     "dishka>=1.7,<2",
     "dishka-ag2>=1,<2",
+    "fast-depends>=3.0.9,<4",
     "openviking-sdk==0.1.16",
     "mistune>=3.0,<4",
     "av>=16,<18",

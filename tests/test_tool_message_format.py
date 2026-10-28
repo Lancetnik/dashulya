@@ -30,6 +30,7 @@ from tests.support import (
     TEST_API_KEY,
     MemoryOverride,
     ModelOverrides,
+    group_records,
     group_rows,
     reply_json,
 )
@@ -109,10 +110,12 @@ class ToolMessageFormatTests(unittest.TestCase):
         raw = {"messages": [original().render(), foreign.render(), namesake.render()]}
         result = self.formatter.result(raw, interlocutor_id=42)
         first, second = result["message_blocks"]
-        self.assertIn("42: Alice (@alice, interlocutor)", first["text"])
+        self.assertIn("User 42: Alice (@alice)", first["text"])
         self.assertIn("99: Alice (@alice)", first["text"])
-        self.assertIn("42: Alicia (@new_alice, interlocutor)", second["text"])
-        self.assertNotIn("interlocutor", str(self.formatter.result(raw)))
+        self.assertIn("42: Alicia (@new_alice)", second["text"])
+        self.assertIn("Interlocutor user id: 42", first["text"])
+        self.assertIn("Interlocutor user id: 42", second["text"])
+        self.assertNotIn("Interlocutor", str(self.formatter.result(raw)))
 
     def test_search_deduplicates_rows_without_losing_hit_roles_or_source_metadata(
         self,
@@ -127,6 +130,8 @@ class ToolMessageFormatTests(unittest.TestCase):
         self.assertEqual(result["hits"][0]["score"], 0.5)
         block = result["message_blocks"][0]
         self.assertEqual(block["chat"], "telegram:-100123")
+        self.assertIn("messages:", block["text"])
+        self.assertNotIn("[id,sender,time,text,reply_to?,attachment?]", block["text"])
         self.assertEqual(
             group_rows(block["text"]),
             [
@@ -135,8 +140,9 @@ class ToolMessageFormatTests(unittest.TestCase):
             ],
         )
         self.assertIn("42: Alice (@alice)", block["text"])
-        self.assertIn("123: Dashulya (@dashulya_bot, bot, self)", block["text"])
-        self.assertEqual(block["text"].count("Europe/Moscow"), 1)
+        self.assertNotIn("User 123:", block["text"])
+        self.assertEqual(group_records(block["text"])[1]["role"], "assistant")
+        self.assertNotIn("Europe/Moscow", block["text"])
         self.assertIn("26 October 2026 (Monday)", block["text"])
         self.assertNotIn("DUPLICATE RETRIEVAL PAYLOAD", json.dumps(result))
         self.assertEqual(
@@ -341,12 +347,13 @@ class ToolMessageRoundtripTests(unittest.IsolatedAsyncioTestCase):
             for part in event.parts
             if isinstance(part, TextInput)
         )
-        self.assertIn("99: Alice (interlocutor)", rendered)
+        self.assertIn("User 99: Alice", rendered)
+        self.assertIn("Interlocutor user id: 99", rendered)
         self.assertIn("42: Alice", rendered)
-        self.assertNotIn("42: Alice (interlocutor)", rendered)
+        self.assertNotIn("Interlocutor user id: 42", rendered)
         recent = await dialogue.recent_context((-100123, None), through_message_id=3)
-        self.assertIn("99: Alice (interlocutor)", str(recent))
-        self.assertNotIn("42: Alice (interlocutor)", str(recent))
+        self.assertIn("Interlocutor user id: 99", str(recent))
+        self.assertNotIn("Interlocutor user id: 42", str(recent))
 
     async def test_concurrent_tool_sessions_do_not_share_interlocutor_markers(
         self,
@@ -363,8 +370,12 @@ class ToolMessageRoundtripTests(unittest.IsolatedAsyncioTestCase):
             MemoryOverride(backend, reader=reader),
             ModelOverrides(
                 reply=TestConfig(
-                    ToolCallEvent("search_memory", arguments='{"query":"original"}'),
-                    ToolCallEvent("chat_history", arguments='{"action":"list"}'),
+                    ToolCallEvent(
+                        "search_memory", arguments='{"query":"original","user_id":123}'
+                    ),
+                    ToolCallEvent(
+                        "chat_history", arguments='{"action":"list","user_id":123}'
+                    ),
                     reply_json("Done"),
                 ),
                 decision=TestConfig("false"),
@@ -379,7 +390,7 @@ class ToolMessageRoundtripTests(unittest.IsolatedAsyncioTestCase):
                     "Read originals",
                     stream=stream,
                     variables={"user_id": user_id},
-                    dependencies={MemoryAccess: MemoryAccess(42, True)},
+                    dependencies={"memory_access": MemoryAccess(42, True)},
                 )
                 for user_id, stream in sessions
             )
@@ -404,7 +415,8 @@ class ToolMessageRoundtripTests(unittest.IsolatedAsyncioTestCase):
                 assert isinstance(block, dict)
                 header = block["text"]
                 assert isinstance(header, str)
-                self.assertIn(f"{user_id}: Alice (@alice, interlocutor)", header)
+                self.assertIn(f"Interlocutor user id: {user_id}", header)
+                self.assertIn(f"User {user_id}: Alice (@alice)", header)
                 other = 99 if user_id == 42 else 42
                 self.assertIn(f"{other}: Alice (@alice)", header)
 
@@ -449,7 +461,7 @@ class ToolMessageRoundtripTests(unittest.IsolatedAsyncioTestCase):
             "Read sources",
             stream=stream,
             variables={"user_id": 42},
-            dependencies={MemoryAccess: MemoryAccess(42, True)},
+            dependencies={"memory_access": MemoryAccess(42, True)},
         )
         events = [
             event
@@ -465,7 +477,8 @@ class ToolMessageRoundtripTests(unittest.IsolatedAsyncioTestCase):
                 part.data for part in event.result.parts if isinstance(part, DataInput)
             )
             self.assertEqual(data, formatter.result(raw, interlocutor_id=42))
-            self.assertIn("author_user=42, interlocutor", str(data))
+            self.assertIn("author_user=42", str(data))
+            self.assertIn("Interlocutor user id: 42", str(data))
         dialogue = await container.get(Dialogue)
         with patch.object(agent, "ask", wraps=agent.ask) as ask:
             answer = await dialogue.reply(
