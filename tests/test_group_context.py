@@ -17,6 +17,7 @@ from aiogram.types import Message, Update, User
 from dashulya.ai.agents.factory import create_reply_agent
 from dashulya.ai.dialogue import Dialogue
 from dashulya.bot.messages import conversation_key
+from dashulya.domain.groups import Group, GroupRegistry
 from dashulya.domain.memory import MemoryAccess, MemoryMessage
 from dashulya.domain.messages import Reply
 from dashulya.main import create_container
@@ -79,6 +80,9 @@ class GroupContextTests(PostgresTestCase):
             ),
         )
         self.addAsyncCleanup(self.container.close)
+        groups = await self.container.get(GroupRegistry)
+        await groups.observe(Group(CHAT["id"], CHAT["title"]))
+        await groups.activate(CHAT["id"])
         self.dispatcher = await self.container.get(Dispatcher)
         self.agent = await self.container.get(Agent[Reply])
         self.ask = AsyncMock(wraps=self.agent.ask)

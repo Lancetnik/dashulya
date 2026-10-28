@@ -13,6 +13,8 @@ from aiogram.methods import SendMessage, SendRichMessage, TelegramMethod
 from aiogram.types import File, Message, Update, User
 
 from dashulya.bot.formatting import text_chunks
+from dashulya.domain.groups import Group
+from dashulya.domain.memory import MessageRecorder
 from dashulya.domain.messages import ImageOmission, Reply
 from dashulya.main import create_container
 from dashulya.main.config import Settings
@@ -45,6 +47,7 @@ ANIMATION: dict[str, Any] = {
 
 class _AIHandlerFixture(PostgresTestCase):
     public_group_ids: tuple[int, ...] = ()
+    active_group = True
 
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
@@ -70,6 +73,7 @@ class _AIHandlerFixture(PostgresTestCase):
         self.dialogue.recent_context.return_value = []
         self.decision_agent = AsyncMock(spec=Agent)
         self.decision_agent.ask.return_value.content = AsyncMock(return_value=False)
+        self.recorder = AsyncMock(spec=MessageRecorder)
         self.container = create_container(
             Settings(
                 bot_token=BOT_TOKEN,
@@ -78,12 +82,15 @@ class _AIHandlerFixture(PostgresTestCase):
                 public_group_ids=self.public_group_ids,
             ),
             BotOverride(self.bot),
-            RecorderOverride(),
+            RecorderOverride(self.recorder),
             DialogueOverride(self.dialogue),
             DecisionOverride(self.decision_agent),
         )
         self.addAsyncCleanup(self.container.close)
         self.groups = await self.container.get(GroupStore)
+        if self.active_group:
+            await self.groups.remember(Group(GROUP["id"], GROUP["title"]))
+            await self.groups.activate(GROUP["id"])
         self.dispatcher = await self.container.get(Dispatcher)
         self.update_id = 0
         self.get_file = AsyncMock(
@@ -761,6 +768,89 @@ class AIHandlerTests(_AIHandlerFixture):
             self.dialogue.reply.call_args.kwargs["images"],
             (ImageOmission(self.update_id, "decode_failed"),),
         )
+
+
+class GroupActivationTests(_AIHandlerFixture):
+    active_group = False
+    public_group_ids = (-123,)
+
+    async def test_inactive_groups_stay_silent_for_owner_and_participants(self) -> None:
+        for chat_type in ("group", "supergroup"):
+            for sender in (USER, {**USER, "id": 99}):
+                for text in ("@dashulya_bot hello", "Дашуль, помоги", "/help", "/groups"):
+                    await self.message(
+                        text,
+                        chat={**GROUP, "type": chat_type},
+                        sender=sender,
+                        entities=[{"type": "mention", "offset": 0, "length": 13}]
+                        if text.startswith("@")
+                        else [],
+                    )
+                await self.message(
+                    chat={**GROUP, "type": chat_type},
+                    sender=sender,
+                    photo=PHOTO,
+                    caption="@dashulya_bot explain",
+                    caption_entities=[{"type": "mention", "offset": 0, "length": 13}],
+                )
+                await self.message(
+                    "Follow-up",
+                    chat={**GROUP, "type": chat_type},
+                    sender=sender,
+                    reply_to_message={
+                        "message_id": 100,
+                        "date": 1700000000,
+                        "chat": GROUP,
+                        "from": BOT_USER,
+                        "text": "Earlier answer",
+                    },
+                )
+        self.requests.assert_not_awaited()
+        self.dialogue.reply.assert_not_awaited()
+        self.decision_agent.ask.assert_not_awaited()
+        self.get_file.assert_not_awaited()
+        self.recorder.record.assert_awaited()
+        self.assertFalse(await self.groups.is_active(GROUP["id"]))
+
+    async def test_only_actual_human_owner_can_activate_group(self) -> None:
+        for sender in ({**USER, "id": 99}, {**USER, "is_bot": True}):
+            await self.message(
+                "/start@dashulya_bot",
+                chat=GROUP,
+                sender=sender,
+                forward_origin={"type": "user", "date": 1700000000, "sender_user": USER},
+            )
+        await self.message("/start", chat=GROUP, **{"from": None})
+        await self.message("/start@other_bot", chat=GROUP)
+        self.assertFalse(await self.groups.is_active(GROUP["id"]))
+        self.requests.assert_not_awaited()
+        await self.message("/start@dashulya_bot", chat=GROUP, message_thread_id=7)
+        self.assertTrue(await self.groups.is_active(GROUP["id"]))
+        self.assertIn("active in this group", self.replies()[-1].text)
+        self.dialogue.reply.assert_not_awaited()
+        self.decision_agent.ask.assert_not_awaited()
+        for sender in (USER, {**USER, "id": 99}):
+            await self.message(
+                "@dashulya_bot hello",
+                chat=GROUP,
+                sender=sender,
+                entities=[{"type": "mention", "offset": 0, "length": 13}],
+            )
+        self.assertEqual(self.dialogue.reply.await_count, 2)
+
+    async def test_private_start_and_activation_of_another_group_do_not_unlock_group(
+        self,
+    ) -> None:
+        await self.message("/start")
+        self.assertIn("Hi!", self.replies()[-1].text)
+        self.assertEqual(await self.groups.list_groups(), [])
+        await self.message("/start", chat={**GROUP, "id": -456})
+        self.assertTrue(await self.groups.is_active(-456))
+        self.requests.reset_mock()
+        await self.message("Дашуль, помоги", chat=GROUP)
+        self.requests.assert_not_awaited()
+        self.decision_agent.ask.assert_not_awaited()
+        self.dialogue.reply.assert_not_awaited()
 
 
 class PublicGroupHandlerTests(_AIHandlerFixture):
