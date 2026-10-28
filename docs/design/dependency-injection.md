@@ -37,7 +37,8 @@ domain/
 ```
 
 `domain` has no application or infrastructure imports. `GroupRegistry` owns
-observed group migrations, membership changes, and bounded group-list output.
+observed group migrations, membership changes, persistent activation, and bounded
+group-list output.
 `storage.groups.GroupStore` implements the asynchronous `GroupRepository` using
 PostgreSQL. `DatabaseProvider` owns the single application-scoped async pool,
 initializes its schema and closes it after dependent resources are finalized.
@@ -79,6 +80,10 @@ Private messages and commands stay owner-only. Human participants in those
 groups may proceed to normal addressing; bot/missing senders and unauthorized
 chats remain silent. Capture and group tracking still precede this gate. The
 allowlist grants dialogue access only and does not expand memory authority.
+The same gate checks group activation through `GroupRegistry`; inactive groups
+admit only the human owner's `/start`, which activates the group in PostgreSQL
+before confirming it. Ordinary observations preserve activation, migration
+transfers it, and departure removes it with the registry entry.
 
 AI factories accept ordinary arguments; tools declare injected dependencies
 with `FromDishka` and the AG2 integration's `@inject`. Model choices, timeouts,

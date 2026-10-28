@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update, User
 
+from dashulya.database import Database
 from dashulya.domain.groups import Group, GroupRegistry
 from dashulya.main import create_container
 from dashulya.main.config import Settings
@@ -126,11 +127,17 @@ class GroupTrackingTests(PostgresTestCase):
         text = self.last_reply()
         self.assertIn("Test group (ID: -123)", text)
         self.assertIn("Public group @public_group (ID: -100456)", text)
+        self.assertEqual(text.count("— inactive (send /start there)"), 2)
         self.assertLess(text.index("Public group"), text.index("Test group"))
 
     async def test_existing_group_is_registered_before_answering_command(self) -> None:
         await self.message("/groups@dashulya_bot", chat=GROUP_CHAT)
+        self.requests.assert_not_awaited()
+        self.assertEqual(await self.groups.list_groups(), [Group(-123, "Test group")])
+        await self.message("/start@dashulya_bot", chat=GROUP_CHAT)
+        await self.message("/groups@dashulya_bot", chat=GROUP_CHAT)
         self.assertIn("Test group (ID: -123)", self.last_reply())
+        self.assertIn("— active", self.last_reply())
         self.assertEqual(len(await self.groups.list_groups()), 1)
 
     async def test_messages_refresh_metadata_without_duplicate_groups(self) -> None:
@@ -233,6 +240,74 @@ class GroupTrackingTests(PostgresTestCase):
 
 
 class GroupPersistenceTests(PostgresTestCase):
+    async def test_activation_survives_restart_metadata_refresh_and_membership_update(
+        self,
+    ) -> None:
+        groups = GroupStore(self.database)
+        await groups.remember(Group(-123, "Test group"))
+        self.assertFalse(await groups.is_active(-123))
+        self.assertFalse(await groups.is_active(-999))
+        await groups.activate(-123)
+        await groups.activate(-123)
+        reopened_database = Database(self.database_url)
+        self.addAsyncCleanup(reopened_database.close)
+        await reopened_database.open()
+        reopened = GroupStore(reopened_database)
+        registry = GroupRegistry(reopened)
+        await registry.observe(Group(-123, "Renamed group", "renamed"))
+        await registry.membership(Group(-123, "Renamed group", "renamed"), present=True)
+        self.assertTrue(await registry.is_active(-123))
+        self.assertEqual(
+            await reopened.list_groups(),
+            [Group(-123, "Renamed group", "renamed", active=True)],
+        )
+        await registry.membership(Group(-123, "Renamed group"), present=False)
+        await registry.membership(Group(-123, "Renamed group"), present=True)
+        self.assertFalse(await registry.is_active(-123))
+
+    async def test_activation_follows_migration_in_either_service_message_order(
+        self,
+    ) -> None:
+        for incoming_first in (False, True):
+            with self.subTest(incoming_first=incoming_first):
+                store = GroupStore(self.database)
+                registry = GroupRegistry(store)
+                await registry.observe(Group(-123, "Old group"))
+                await registry.activate(-123)
+                # The target may already have been observed before the migration.
+                await registry.observe(Group(-100456, "New group"))
+                if incoming_first:
+                    await registry.observe(
+                        Group(-100456, "New group"), migrated_from=-123
+                    )
+                    await registry.observe(Group(-123, "Old group"), migrated_to=-100456)
+                else:
+                    await registry.observe(Group(-123, "Old group"), migrated_to=-100456)
+                    await registry.observe(
+                        Group(-100456, "New group"), migrated_from=-123
+                    )
+                self.assertTrue(await registry.is_active(-100456))
+                self.assertFalse(await registry.is_active(-123))
+                self.assertEqual(len(await store.list_groups()), 1)
+                await store.forget(-100456)
+
+    async def test_existing_database_groups_require_activation_after_schema_upgrade(
+        self,
+    ) -> None:
+        async with self.database.connection() as connection:
+            await connection.execute("ALTER TABLE groups DROP COLUMN active")
+            await connection.execute(
+                "INSERT INTO groups VALUES (%s,%s,%s)", (-123, "Existing group", None)
+            )
+        reopened = Database(self.database_url)
+        self.addAsyncCleanup(reopened.close)
+        await reopened.open()
+        groups = GroupStore(reopened)
+        self.assertEqual(await groups.list_groups(), [Group(-123, "Existing group")])
+        self.assertFalse(await groups.is_active(-123))
+        await groups.activate(-123)
+        self.assertTrue(await groups.is_active(-123))
+
     async def test_groups_survive_reopening_database(self) -> None:
         groups = GroupStore(self.database)
         await groups.remember(Group(-123, "Test group", "test_group"))

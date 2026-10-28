@@ -54,7 +54,11 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
   group dialogue only in `PUBLIC_GROUP_IDS`; existing addressing rules still
   apply. The owner retains access elsewhere. Bot senders, missing senders and
   unauthorized users are silently ignored before command execution or model
-  invocation. Forwarded identities and `/start` do not grant access.
+  invocation. Forwarded identities do not grant access. Every group starts
+  inactive, including existing groups on upgrade; only the actual human owner's
+  `/start` in that group activates replies. Until then, all other commands,
+  addressing decisions and reply generation stay silent, including the owner's.
+  Activation preserves the existing participant access rules.
 - **Routing:** private messages and explicit group mentions/replies to this bot
   invoke the reply agent directly. Group messages naming Dashulya, including
   “Дашуль” in any letter case, first pass an
@@ -92,7 +96,9 @@ overrides, and resource lifetimes. [GLOSSARY.md](GLOSSARY.md) defines domain ter
 - **Group registry:** preserve groups across restarts, refresh observed names,
   remove departed groups, and replace old IDs on supergroup migration. It is a
   registry of observed groups; Telegram does not supply a complete chat list,
-  and updates missed during long downtime can leave it stale.
+  and updates missed during long downtime can leave it stale. Preserve activation
+  across restarts, metadata refresh and migration; departure removes activation,
+  so rejoining requires a new owner `/start`. `/groups` shows activation status.
 
 ## Memory and local data
 

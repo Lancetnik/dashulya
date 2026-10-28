@@ -73,15 +73,24 @@ records the storage decision.
 
 | Command | What happens |
 | --- | --- |
-| `/start` | Meet Dashulya |
+| `/start` | Meet Dashulya; activate replies in the current group |
 | `/help` | See the available commands and how to use them |
 | `/groups` | List the groups she knows about |
 | `/clear` | Reset the current private conversation |
 
 Private conversations and commands are available only to the configured owner.
+Every group starts inactive. The owner must send `/start` (or
+`/start@<bot_username>`) in that group before Dashulya responds to any other
+commands or messages, including mentions and replies from the owner. Sending
+`/start` privately or in another group does not activate it. `/groups` shows each
+group's activation status. Activation survives restarts, name changes and
+supergroup migration; removing and re-adding the bot requires a new `/start`.
+Groups already known before this feature also start inactive after upgrading.
+Group tracking and message capture continue while replies are inactive.
+
 In groups listed in `PUBLIC_GROUP_IDS`, all human participants may address the
-bot; other groups retain owner-only access. Use comma-separated negative numeric
-group IDs; the default empty list keeps dialogue owner-only everywhere.
+bot after activation; other groups retain owner-only access. Use comma-separated
+negative numeric group IDs; the default empty list keeps dialogue owner-only everywhere.
 Private messages, an explicit @mention of the bot, and replies to its messages
 start an AI conversation directly. Commands remain owner-only in enabled groups.
 

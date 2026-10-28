@@ -16,6 +16,7 @@ from dashulya.bot.middlewares.memory import (
 from dashulya.bot.reactions import TelegramReactions
 from dashulya.bot.replies import ReplyDelivery
 from dashulya.bot.router import create_router
+from dashulya.domain.groups import GroupRegistry
 from dashulya.domain.memory import MessageRecorder
 from dashulya.domain.reactions import MessageReactions
 from dashulya.main.config import IMAGE_MAX_BYTES, Settings
@@ -58,9 +59,9 @@ class TelegramProvider(Provider):
             yield bot
 
     @provide
-    def access(self, settings: Settings) -> AccessMiddleware:
+    def access(self, settings: Settings, groups: GroupRegistry) -> AccessMiddleware:
         return AccessMiddleware(
-            settings.owner_user_id, public_group_ids=settings.public_group_ids
+            settings.owner_user_id, groups, public_group_ids=settings.public_group_ids
         )
 
     @provide
