@@ -77,14 +77,22 @@ indexing. Persist successfully delivered bot responses with their actual Telegra
 IDs and reply targets, including individual chunks. An embedded reply snapshot
 can fill a missing parent but cannot replace an already recorded original.
 Unavailable parents end that path. Capture retains Telegram `file_id` and known
-file size for photos and static JPEG, PNG and WebP image documents. After
-authorization, addressing and context selection, download those saved references
+file size for photos, JPEG/PNG/WebP image documents, stickers, Telegram animations
+and GIF documents, including thumbnail references and the required visual-input
+kind. After authorization, addressing and context selection, download those saved references
 from the same selected originals into bounded RAM. This extends the original
-current/direct-reply-only image policy: a participant's earlier photo must remain
-visible when a later text request includes it in reply context, even after a
+current/direct-reply-only image policy: a participant's earlier visual media
+must remain visible when a later text request includes it in reply context, even after a
 restart. Persisting references instead of bytes avoids durable binary storage
 and generated descriptions replacing original evidence. Never expose file IDs
 or download URLs in model-facing history or search results.
+
+Current, direct-reply and saved inputs share one normalizer and loader. Static
+stickers supply their original image; animated/video stickers supply only the
+stored thumbnail, never the TGS/WEBM original. Animations and GIF documents supply
+the first decoded frame, falling back to the stored thumbnail if oversized or
+undecodable. Missing previews produce explicit omissions. Existing photo-only
+references retain their static-image behavior without a data rewrite.
 
 Native image inputs retain their original Telegram message IDs. The current
 and direct-reply images take priority, then saved images from newest to oldest,

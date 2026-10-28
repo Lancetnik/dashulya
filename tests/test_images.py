@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from collections.abc import AsyncGenerator
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, Mock, call, patch
@@ -9,6 +10,7 @@ from aiogram import Bot
 from aiogram.types import File, Message
 
 from dashulya.bot.images import ImageInputError, TelegramImages
+from dashulya.bot.messages import image_file
 from dashulya.domain.memory import MemoryMessage
 from dashulya.domain.messages import ImageAttachment, ImageFile, ImageOmission
 from tests.media_fixtures import animation_bytes
@@ -52,6 +54,14 @@ def image_message(**fields: Any) -> Message:
 
 
 class ImageTests(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def saved_media(cls, message: Message) -> MemoryMessage:
+        return replace(
+            cls.saved_image(message.message_id),
+            image_file=image_file(message),
+            media_type=message.content_type,
+        )
+
     @staticmethod
     def saved_image(number: int, *, size: int | None = None) -> MemoryMessage:
         return MemoryMessage(
@@ -273,7 +283,6 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(
                     sticker_type=sticker_type, sticker_format=sticker_format
                 ):
-                    self.get_file.reset_mock()
                     sticker = {
                         **STICKER,
                         "type": sticker_type,
@@ -281,19 +290,115 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
                         "is_video": sticker_format == "video",
                         "thumbnail": THUMBNAIL,
                     }
-                    images = await self.images.load(
-                        image_message(photo=None, sticker=sticker)
+                    message = image_message(photo=None, sticker=sticker)
+                    for saved in (False, True):
+                        with self.subTest(saved=saved):
+                            self.get_file.reset_mock()
+                            images = (
+                                await self.images.load_context((
+                                    self.saved_media(message),
+                                ))
+                                if saved
+                                else await self.images.load(message)
+                            )
+                            assert isinstance(images[0], ImageAttachment)
+                            self.assertEqual(images[0].data, self.chunks[0])
+                            self.assertEqual(images[0].media_type, "image/webp")
+                            self.assertEqual(
+                                images[0].preview_kind,
+                                "sticker" if sticker_format != "static" else None,
+                            )
+                            self.get_file.assert_awaited_once_with(
+                                "sticker" if sticker_format == "static" else "thumbnail"
+                            )
+
+    async def test_saved_sticker_without_thumbnail_never_downloads_original(self) -> None:
+        for flag in ("is_animated", "is_video"):
+            images = await self.images.load_context((
+                self.saved_media(
+                    image_message(photo=None, sticker={**STICKER, flag: True})
+                ),
+            ))
+            self.assertEqual(images, (ImageOmission(1, "preview_unavailable"),))
+        self.get_file.assert_not_awaited()
+
+    async def test_saved_oversized_animations_and_stickers_use_thumbnail_size(
+        self,
+    ) -> None:
+        for fields in (
+            {"animation": {**ANIMATION, "file_size": 20_000_001}},
+            {
+                "sticker": {
+                    **STICKER,
+                    "is_video": True,
+                    "file_size": 20_000_001,
+                    "thumbnail": THUMBNAIL,
+                }
+            },
+        ):
+            with self.subTest(fields=fields):
+                self.get_file.reset_mock()
+                images = await self.images.load_context((
+                    self.saved_media(image_message(photo=None, **fields)),
+                ))
+                self.assertIsInstance(images[0], ImageAttachment)
+                self.get_file.assert_awaited_once_with("thumbnail")
+
+    async def test_saved_animations_and_gif_documents_decode_the_original_first_frame(
+        self,
+    ) -> None:
+        self.chunks = [animation_bytes()]
+        self.images = TelegramImages(self.bot, max_bytes=100_000)
+        for fields, expected_id in (
+            (
+                {
+                    "animation": ANIMATION,
+                    "document": {
+                        "file_id": "legacy",
+                        "file_unique_id": "legacy",
+                        "mime_type": "image/gif",
+                    },
+                },
+                "animation",
+            ),
+            (
+                {
+                    "document": {
+                        "file_id": "gif",
+                        "file_unique_id": "gif",
+                        "file_name": "picture.GIF",
+                    }
+                },
+                "gif",
+            ),
+        ):
+            with self.subTest(fields=fields):
+                self.get_file.reset_mock()
+                images = await self.images.load_context((
+                    self.saved_media(image_message(photo=None, **fields)),
+                ))
+                assert isinstance(images[0], ImageAttachment)
+                self.assertEqual(images[0].media_type, "image/jpeg")
+                self.assertTrue(images[0].first_frame)
+                self.assertEqual(images[0].preview_kind, "animation")
+                self.get_file.assert_awaited_once_with(expected_id)
+
+    async def test_saved_undecodable_animation_uses_thumbnail_or_omission(self) -> None:
+        for thumbnail in (THUMBNAIL, None):
+            images = await self.images.load_context((
+                self.saved_media(
+                    image_message(
+                        photo=None, animation={**ANIMATION, "thumbnail": thumbnail}
                     )
-                    assert isinstance(images[0], ImageAttachment)
-                    self.assertEqual(images[0].data, self.chunks[0])
-                    self.assertEqual(images[0].media_type, "image/webp")
-                    self.assertEqual(
-                        images[0].preview_kind,
-                        "sticker" if sticker_format != "static" else None,
-                    )
-                    self.get_file.assert_awaited_once_with(
-                        "sticker" if sticker_format == "static" else "thumbnail"
-                    )
+                ),
+            ))
+            if thumbnail:
+                assert isinstance(images[0], ImageAttachment)
+                self.assertEqual(images[0].data, PNG)
+                self.assertFalse(images[0].first_frame)
+                self.assertEqual(images[0].preview_kind, "animation")
+            else:
+                self.assertEqual(images, (ImageOmission(1, "decode_failed"),))
 
     async def test_animated_sticker_without_thumbnail_produces_note_without_download(
         self,

@@ -1,18 +1,16 @@
 import asyncio
 from contextlib import aclosing
-from pathlib import PurePosixPath
 from typing import Literal
 
 from aiogram import Bot
-from aiogram.types import Animation, Document, Message, PhotoSize, Sticker
+from aiogram.types import Message
 
 from dashulya.bot.media_frames import FrameBudgetError, FrameDecodeError, first_frame
-from dashulya.bot.messages import conversation_key
+from dashulya.bot.messages import conversation_key, image_file
 from dashulya.domain.memory import MemoryMessage
 from dashulya.domain.messages import ImageAttachment, ImageFile, ImageOmission
 
 ImageMediaType = Literal["image/jpeg", "image/png", "image/webp"]
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
 class ImageInputError(ValueError):
@@ -21,44 +19,6 @@ class ImageInputError(ValueError):
 
 class ImageTooLargeError(ImageInputError):
     """Image bytes cannot fit within this request's remaining budget."""
-
-
-def _preview_kind(message: Message) -> Literal["sticker", "animation"] | None:
-    if message.animation is not None:
-        return "animation"
-    if message.sticker and (message.sticker.is_animated or message.sticker.is_video):
-        return "sticker"
-    document = message.document
-    if document and (
-        (document.mime_type or "").lower() == "image/gif"
-        or PurePosixPath(document.file_name or "").suffix.lower() == ".gif"
-    ):
-        return "animation"
-    return None
-
-
-def _image_file(message: Message) -> Document | PhotoSize | Sticker | None:
-    # Telegram may also populate `document` for an animation; its thumbnail takes precedence.
-    if message.animation is not None:
-        return message.animation.thumbnail
-    if message.sticker is not None:
-        sticker = message.sticker
-        return sticker.thumbnail if sticker.is_animated or sticker.is_video else sticker
-    if message.photo:
-        return max(message.photo, key=lambda photo: photo.width * photo.height)
-    if message.document and _preview_kind(message) == "animation":
-        return message.document.thumbnail
-    return message.document
-
-
-def _image_candidate(message: Message) -> bool:
-    if message.photo or message.sticker or message.animation:
-        return True
-    document = message.document
-    return document is not None and (
-        (document.mime_type or "").startswith("image/")
-        or PurePosixPath(document.file_name or "").suffix.lower() in IMAGE_EXTENSIONS
-    )
 
 
 def _media_type(data: bytes) -> ImageMediaType:
@@ -84,7 +44,7 @@ class TelegramImages:
 
     async def _read(
         self,
-        file: Animation | Document | PhotoSize | Sticker | ImageFile,
+        file: ImageFile,
         *,
         used_bytes: int,
     ) -> bytes:
@@ -107,11 +67,11 @@ class TelegramImages:
         return bytes(data)
 
     async def _animation(
-        self, source: Message, original: Animation | Document, *, used_bytes: int
+        self, file: ImageFile, message_id: int, *, used_bytes: int
     ) -> ImageAttachment | ImageOmission:
         reason: Literal["too_large", "decode_failed"] = "decode_failed"
         try:
-            data = await self._read(original, used_bytes=used_bytes)
+            data = await self._read(file, used_bytes=used_bytes)
             frame = await asyncio.to_thread(
                 first_frame, data, max_bytes=self._max_bytes - used_bytes
             )
@@ -123,19 +83,44 @@ class TelegramImages:
             return ImageAttachment(
                 frame,
                 "image/jpeg",
-                source.message_id,
+                message_id,
                 preview_kind="animation",
                 first_frame=True,
             )
-        thumbnail = _image_file(source)
+        thumbnail = self._thumbnail(file)
         if thumbnail is None:
-            return ImageOmission(source.message_id, reason)
+            return ImageOmission(message_id, reason)
         try:
             preview = await self._read(thumbnail, used_bytes=used_bytes)
         except ImageTooLargeError:
-            return ImageOmission(source.message_id)
+            return ImageOmission(message_id)
         return ImageAttachment(
-            preview, _media_type(preview), source.message_id, preview_kind="animation"
+            preview, _media_type(preview), message_id, preview_kind="animation"
+        )
+
+    @staticmethod
+    def _thumbnail(file: ImageFile) -> ImageFile | None:
+        if file.thumbnail_file_id is None:
+            return None
+        return ImageFile(file.thumbnail_file_id, file.thumbnail_file_size)
+
+    async def _load_image(
+        self, file: ImageFile, message_id: int, *, used_bytes: int
+    ) -> ImageAttachment | ImageOmission:
+        if file.preview_kind == "animation":
+            return await self._animation(file, message_id, used_bytes=used_bytes)
+        source = file
+        if file.preview_kind == "sticker":
+            thumbnail = self._thumbnail(file)
+            if thumbnail is None:
+                return ImageOmission(message_id, "preview_unavailable")
+            source = thumbnail
+        try:
+            data = await self._read(source, used_bytes=used_bytes)
+        except ImageTooLargeError:
+            return ImageOmission(message_id)
+        return ImageAttachment(
+            data, _media_type(data), message_id, preview_kind=file.preview_kind
         )
 
     async def load(self, message: Message) -> tuple[ImageAttachment | ImageOmission, ...]:
@@ -148,45 +133,23 @@ class TelegramImages:
         if (
             parent is not None
             and conversation_key(parent) == conversation_key(message)
-            and _image_candidate(parent)
+            and image_file(parent) is not None
         ):
             sources.append(parent)
         images: list[ImageAttachment | ImageOmission] = []
         used_bytes = 0
         async with asyncio.timeout(30):
             for source in sources:
-                animation = source.animation or (
-                    source.document if _preview_kind(source) == "animation" else None
-                )
-                if animation is not None:
-                    image = await self._animation(
-                        source, animation, used_bytes=used_bytes
-                    )
-                    images.append(image)
-                    if isinstance(image, ImageAttachment):
-                        used_bytes += len(image.data)
-                    continue
-                file = _image_file(source)
+                file = image_file(source)
                 if file is None:
-                    images.append(ImageOmission(source.message_id, "preview_unavailable"))
-                    continue
-                if not _image_candidate(source):
                     error_message = "Please send an image in JPEG, PNG or WebP format."
                     raise ImageInputError(error_message)
-                try:
-                    data = await self._read(file, used_bytes=used_bytes)
-                except ImageTooLargeError:
-                    images.append(ImageOmission(source.message_id))
-                    continue
-                images.append(
-                    ImageAttachment(
-                        data,
-                        _media_type(data),
-                        source.message_id,
-                        preview_kind=_preview_kind(source),
-                    )
+                image = await self._load_image(
+                    file, source.message_id, used_bytes=used_bytes
                 )
-                used_bytes += len(data)
+                images.append(image)
+                if isinstance(image, ImageAttachment):
+                    used_bytes += len(image.data)
         return tuple(images)
 
     async def load_context(
@@ -226,10 +189,9 @@ class TelegramImages:
             return ImageOmission(message.message_id, "unavailable")
         try:
             async with asyncio.timeout_at(deadline):
-                data = await self._read(message.image_file, used_bytes=used_bytes)
-                return ImageAttachment(data, _media_type(data), message.message_id)
-        except ImageTooLargeError:
-            return ImageOmission(message.message_id)
+                return await self._load_image(
+                    message.image_file, message.message_id, used_bytes=used_bytes
+                )
         except Exception:
             # A stale file must not suppress an otherwise answerable request.
             return ImageOmission(message.message_id, "unavailable")

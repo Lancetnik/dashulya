@@ -4,21 +4,24 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import AsyncMock
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
+from aiogram import Bot
 from aiogram.types import Message, Update
 
+from dashulya.bot.images import TelegramImages
 from dashulya.bot.messages import capture_message
 from dashulya.bot.middlewares.memory import CaptureMessagesMiddleware
 from dashulya.domain.memory import MemoryAccess, MemoryMessage, MessageRecorder
-from dashulya.domain.messages import ImageFile
+from dashulya.domain.messages import ImageAttachment, ImageFile
 from dashulya.memory.history import CanonicalHistory
 from dashulya.memory.store import MessageStore
 from tests.postgres import PostgresTestCase
 
 
 class MemoryCaptureTests(PostgresTestCase):
-    async def test_image_documents_retain_references_without_capturing_animation_files(
+    async def test_image_and_gif_documents_retain_references(
         self,
     ) -> None:
         recorder = AsyncMock(spec=MessageRecorder)
@@ -50,7 +53,109 @@ class MemoryCaptureTests(PostgresTestCase):
             },
         })
         await capture_message(recorder, gif, allow_private=True)
-        self.assertIsNone(recorder.record.await_args.args[0].image_file)
+        self.assertEqual(
+            recorder.record.await_args.args[0].image_file,
+            ImageFile("gif", preview_kind="animation"),
+        )
+
+    async def test_sticker_and_animation_references_reload_after_restart(self) -> None:
+        thumbnail = {
+            "file_id": "thumbnail",
+            "file_unique_id": "thumb",
+            "width": 2,
+            "height": 2,
+            "file_size": 16,
+        }
+        sticker = {
+            "file_id": "sticker",
+            "file_unique_id": "sticker",
+            "type": "regular",
+            "width": 2,
+            "height": 2,
+            "is_animated": False,
+            "is_video": False,
+        }
+        cases: tuple[tuple[dict[str, Any], str, str | None], ...] = (
+            ({"sticker": sticker}, "sticker", None),
+            (
+                {"sticker": {**sticker, "is_animated": True, "thumbnail": thumbnail}},
+                "thumbnail",
+                "sticker",
+            ),
+            (
+                {"sticker": {**sticker, "is_video": True, "thumbnail": thumbnail}},
+                "thumbnail",
+                "sticker",
+            ),
+            (
+                {
+                    "animation": {
+                        "file_id": "animation",
+                        "file_unique_id": "animation",
+                        "width": 2,
+                        "height": 2,
+                        "duration": 1,
+                        "thumbnail": thumbnail,
+                    }
+                },
+                "animation",
+                "animation",
+            ),
+            (
+                {
+                    "document": {
+                        "file_id": "gif",
+                        "file_unique_id": "gif",
+                        "mime_type": "image/gif",
+                        "thumbnail": thumbnail,
+                    }
+                },
+                "gif",
+                "animation",
+            ),
+        )
+        store = MessageStore(self.database)
+        loader = TelegramImages(AsyncMock(spec=Bot), max_bytes=100_000)
+        png = b"\x89PNG\r\n\x1a\nimage-data"
+        for number, (fields, expected_file, kind) in enumerate(cases, start=1):
+            with self.subTest(fields=fields):
+                await capture_message(
+                    store,
+                    Message.model_validate({
+                        "message_id": number,
+                        "date": 1792929600,
+                        "chat": {"id": -123, "type": "supergroup", "title": "Group"},
+                        **fields,
+                    }),
+                )
+                restarted = MessageStore(self.database)
+                selected = await restarted.context(
+                    (-123, None), number, limit=1, parent_hops=0
+                )
+                reference = selected.messages[0].image_file
+                assert reference is not None
+                self.assertEqual(reference.preview_kind, kind)
+                if kind:
+                    self.assertEqual(reference.thumbnail_file_id, "thumbnail")
+                    self.assertEqual(reference.thumbnail_file_size, 16)
+                with (
+                    patch.object(
+                        loader, "_read", AsyncMock(return_value=png)
+                    ) as download,
+                    patch("dashulya.bot.images.first_frame", return_value=b"frame"),
+                ):
+                    images = await loader.load_context(selected.messages)
+                assert isinstance(images[0], ImageAttachment)
+                self.assertEqual(images[0].message_id, number)
+                self.assertEqual(images[0].preview_kind, kind)
+                self.assertEqual(images[0].first_frame, kind == "animation")
+                download.assert_awaited_once()
+                assert download.await_args is not None
+                self.assertEqual(download.await_args.args[0].file_id, expected_file)
+                originals = await restarted.originals(MemoryAccess(-123, False))
+                self.assertTrue(
+                    all("image_file" not in original.render() for original in originals)
+                )
 
     async def test_photo_file_reference_survives_restart_and_respects_context_scope(
         self,

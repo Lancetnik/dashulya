@@ -86,7 +86,13 @@ class MessageStore:
             "reply_to_id": value.reply_to_id,
             "edited_at": edited,
             "media_type": value.media_type,
-            "image_file": Jsonb(asdict(value.image_file)) if value.image_file else None,
+            "image_file": Jsonb({
+                key: item
+                for key, item in asdict(value.image_file).items()
+                if item is not None
+            })
+            if value.image_file
+            else None,
             "url": value.url,
             "provenance": value.provenance,
             "archive_key": value.archive_key,

@@ -1,24 +1,48 @@
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
+from typing import Literal
 
 from aiogram.enums import ChatType
-from aiogram.types import Message
+from aiogram.types import Animation, Document, Message, Sticker
 
 from dashulya.domain.memory import MemoryMessage, MessageRecorder
 from dashulya.domain.messages import ConversationKey, ImageFile
 
 
+def _visual_file(
+    file: Animation | Document | Sticker,
+    *,
+    preview_kind: Literal["sticker", "animation"] | None = None,
+) -> ImageFile:
+    thumbnail = file.thumbnail if preview_kind is not None else None
+    return ImageFile(
+        file.file_id,
+        file.file_size,
+        preview_kind=preview_kind,
+        thumbnail_file_id=thumbnail.file_id if thumbnail else None,
+        thumbnail_file_size=thumbnail.file_size if thumbnail else None,
+    )
+
+
 def image_file(message: Message) -> ImageFile | None:
-    """Retain downloadable static images for later selected reply context."""
+    """Retain the same visual inputs for current messages and later reply context."""
+    if message.animation is not None:
+        return _visual_file(message.animation, preview_kind="animation")
+    if message.sticker is not None:
+        sticker = message.sticker
+        return _visual_file(
+            sticker,
+            preview_kind="sticker" if sticker.is_animated or sticker.is_video else None,
+        )
     if message.photo:
         photo = max(message.photo, key=lambda item: item.width * item.height)
         return ImageFile(photo.file_id, photo.file_size)
     document = message.document
-    if document is not None and message.animation is None:
+    if document is not None:
         extension = PurePosixPath(document.file_name or "").suffix.lower()
         mime = (document.mime_type or "").lower()
         if mime == "image/gif" or extension == ".gif":
-            return None
+            return _visual_file(document, preview_kind="animation")
         if mime in {"image/jpeg", "image/png", "image/webp"} or extension in {
             ".jpg",
             ".jpeg",

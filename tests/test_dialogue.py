@@ -595,14 +595,87 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_passively_captured_photo_reaches_later_group_request(self) -> None:
+        await self.assert_captured_media_reaches_followup({
+            "photo": [
+                {"file_id": "photo", "file_unique_id": "unique", "width": 2, "height": 2}
+            ],
+        })
+
+    async def test_passively_captured_stickers_and_animations_reach_later_group_request(
+        self,
+    ) -> None:
+        thumbnail = {
+            "file_id": "thumbnail",
+            "file_unique_id": "thumb",
+            "width": 2,
+            "height": 2,
+        }
+        sticker = {
+            "file_id": "sticker",
+            "file_unique_id": "unique",
+            "type": "regular",
+            "width": 2,
+            "height": 2,
+            "is_animated": False,
+            "is_video": False,
+        }
+        for fields, expected_id, animation in (
+            ({"sticker": sticker}, "sticker", False),
+            (
+                {"sticker": {**sticker, "is_animated": True, "thumbnail": thumbnail}},
+                "thumbnail",
+                False,
+            ),
+            (
+                {"sticker": {**sticker, "is_video": True, "thumbnail": thumbnail}},
+                "thumbnail",
+                False,
+            ),
+            (
+                {
+                    "animation": {
+                        "file_id": "animation",
+                        "file_unique_id": "unique",
+                        "width": 2,
+                        "height": 2,
+                        "duration": 1,
+                        "thumbnail": thumbnail,
+                    }
+                },
+                "animation",
+                True,
+            ),
+            (
+                {
+                    "document": {
+                        "file_id": "gif",
+                        "file_unique_id": "unique",
+                        "mime_type": "image/gif",
+                        "thumbnail": thumbnail,
+                    }
+                },
+                "gif",
+                True,
+            ),
+        ):
+            with self.subTest(fields=fields):
+                await self.assert_captured_media_reaches_followup(
+                    fields, expected_id=expected_id, animation=animation
+                )
+
+    async def assert_captured_media_reaches_followup(
+        self,
+        fields: dict[str, Any],
+        *,
+        expected_id: str = "photo",
+        animation: bool = False,
+    ) -> None:
         photo = Message.model_validate({
             "message_id": 1,
             "date": SENT_AT,
             "chat": {"id": -123, "type": "supergroup", "title": "Group"},
             "from": {"id": 99, "is_bot": False, "first_name": "Boris"},
-            "photo": [
-                {"file_id": "photo", "file_unique_id": "unique", "width": 2, "height": 2}
-            ],
+            **fields,
         })
         request = Message.model_validate({
             "message_id": 2,
@@ -623,6 +696,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(images, "_read", AsyncMock(return_value=png)) as download,
             patch.object(Message, "answer", AsyncMock()),
+            patch("dashulya.bot.images.first_frame", return_value=b"frame"),
         ):
             await ReplyDelivery(bot, self.dialogue, images).reply(
                 request, group_context={"message_id": 2}
@@ -634,9 +708,16 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             for part in event.parts
         ]
         self.assertEqual(
-            [part.data for part in parts if isinstance(part, BinaryInput)], [png]
+            [part.data for part in parts if isinstance(part, BinaryInput)],
+            [b"frame" if animation else png],
         )
         download.assert_awaited_once()
+        assert download.await_args is not None
+        self.assertEqual(download.await_args.args[0].file_id, expected_id)
+        if animation:
+            self.assertIn(
+                "first frame", "\n".join(await self.requests(self.last_stream()))
+            )
 
     async def test_oversized_direct_image_input_never_invokes_model(self) -> None:
         dialogue = Dialogue(self.agent, max_image_bytes=1)

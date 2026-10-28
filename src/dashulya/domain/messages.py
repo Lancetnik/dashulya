@@ -7,10 +7,13 @@ ConversationKey = tuple[int, int | None]
 
 @dataclass(frozen=True)
 class ImageFile:
-    """A Telegram image reference, without downloaded content or a file URL."""
+    """Telegram visual-media references, without downloaded content or file URLs."""
 
     file_id: str = field(repr=False)
     file_size: int | None = None
+    preview_kind: Literal["sticker", "animation"] | None = None
+    thumbnail_file_id: str | None = field(default=None, repr=False)
+    thumbnail_file_size: int | None = None
 
 
 @dataclass(frozen=True)

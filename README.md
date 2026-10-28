@@ -117,9 +117,10 @@ in the whole ordinary group, or the current real forum topic, including the
 current request, plus their reply parents up
 to five hops. Messages appear once in chronological message order; this bot's
 previously delivered replies use the assistant role. Context reads local originals
-immediately, without waiting for semantic indexing. Photos and JPEG, PNG or WebP
-image files in this selection are downloaded from Telegram using saved file IDs,
-even when they were sent without addressing the bot. Current and directly replied-to
+immediately, without waiting for semantic indexing. Photos, JPEG/PNG/WebP image
+files, stickers and GIF/Telegram animations in this selection are downloaded
+from Telegram using saved file IDs, even when they were sent without addressing
+the bot. Current and directly replied-to
 pictures can also be supplied as native image inputs. Missing parents and older
 media without saved file references remain unavailable. The selection has at most
 120 messages, with no additional token cap. See
@@ -169,12 +170,13 @@ The reply model must support image input.
 Private history keeps recent images within the same 20 MB budget, replacing the
 oldest images with explicit placeholders as needed. Text and replies remain.
 Group images are available only for that request and are not added to searchable
-chat memory. Capture persists only Telegram file IDs and known sizes, allowing
-photos and static image files to be downloaded again when selected as earlier
+chat memory. Capture persists only Telegram file IDs, known sizes and visual-input
+metadata, including available thumbnail references. Photos, image files, stickers
+and GIF/Telegram animations can be downloaded again when selected as earlier
 group context, including after a restart. Current and direct-reply inputs take
 priority within the shared budget, followed by newer context images. Unavailable
-saved files produce explicit omission notes. Photos captured before file IDs were
-stored cannot be recovered automatically. Group captions follow the same
+saved files produce explicit omission notes. Attachments captured before their
+file IDs were stored cannot be recovered automatically. Group captions follow the same
 mention/name/reply rules as text.
 
 Sticker messages follow the same access and addressing rules, including a sticker
@@ -185,6 +187,7 @@ stickers supply only the JPEG/WebP thumbnail provided by Telegram. The agent is
 explicitly told when it sees a thumbnail and must not infer animation or motion.
 Missing thumbnails produce an unavailable-image note without downloading the
 animation. Stickers and previews share the image byte budget and RAM-only path.
+These rules also apply to earlier stickers selected in group reply context.
 Inline custom emoji inside text are not fetched as separate sticker images.
 
 GIF and silent MP4 messages delivered as Telegram animations, including GIF files

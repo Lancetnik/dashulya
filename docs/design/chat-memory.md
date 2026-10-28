@@ -116,22 +116,23 @@ message, including participants who cannot invoke the bot. Owner-private
 messages are also captured; other private senders are excluded. Edited updates
 use the same recorder without invoking a reply. Service events are excluded.
 Text, captions and attachment types are stored, along with Telegram `file_id` and
-known file size for photos and static JPEG, PNG and WebP image documents. Passive
-capture does not download or transcribe attachment contents. Incoming reply
+known file size for photos, JPEG/PNG/WebP image documents, stickers, Telegram
+animations and GIF documents. References also retain the visual-input kind and
+available thumbnail IDs/sizes. Passive capture does not download or transcribe
+attachment contents. Incoming reply
 snapshots can fill missing parents without overwriting recorded originals or
 their deeper reply relationships.
 
-After sender authorization and a positive addressing decision, the reply path can download the
-current photo/image document and its direct reply parent's image into RAM. Group
-replies also download saved photo/image-file references from the exact selected
+After sender authorization and a positive addressing decision, the reply path
+can download the current visual media and its direct reply parent's image into RAM. Group
+replies also download saved visual-media references from the exact selected
 reply context, after selection. Current and direct-reply inputs take priority;
 remaining saved images are loaded newest first without downloading an already
 supplied source again. JPEG, PNG and WebP signatures are checked, and their
-combined bytes are capped at
-20,000,000 during streaming. An image known to exceed the remaining budget is
+combined bytes are capped at 20,000,000 during streaming. An image known to exceed the remaining budget is
 not downloaded and instead produces an explicit oversized-image note for the
-reply agent. An overflow
-discovered while streaming stops the download and produces the same note.
+reply agent. An overflow discovered while streaming stops the download and
+produces the same note.
 Native AG2 image inputs and omission notes accompany the question, labelled
 with their source message IDs. Group inputs are restricted
 to the selected reply context. No image bytes or generated descriptions are
@@ -148,8 +149,9 @@ JPEG/WebP thumbnail, never the original TGS/WEBM animation. Native inputs label
 thumbnails as previews with motion unavailable. An absent thumbnail produces a
 specific omission note without a download; oversized originals/previews retain
 the existing byte-budget omission. Regular, mask and custom-emoji sticker
-objects use these same format rules. Capture still records only the attachment
-type and original message evidence; no sticker image or description is indexed.
+objects use these same format rules, including earlier stickers selected from
+saved reply context. Capture records original evidence and file/thumbnail
+references; no sticker image or description is indexed.
 
 Telegram animations (GIF or silent MP4) and GIF documents download the original
 into bounded RAM and decode only its first frame. The model receives one JPEG,
@@ -159,9 +161,10 @@ or undecodable originals fall back to Telegram's thumbnail when available;
 otherwise they produce an omission note. The original download and extracted
 frame respect the shared image byte budget. The animation field takes precedence
 over the duplicate document field Telegram may include for compatibility.
-The same path accepts current animations and direct reply parents; passive
-capture and durable evidence remain unchanged. Reaction media are interpreted
-in conversation rather than defaulting to a literal description, while explicit
+The same path accepts current animations, direct reply parents and earlier
+animations selected from saved reply context. File and thumbnail references
+survive restarts; passive capture never downloads their contents. Reaction media
+are interpreted in conversation rather than defaulting to a literal description, while explicit
 questions and captions take priority.
 
 
