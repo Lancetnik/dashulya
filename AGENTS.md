@@ -20,6 +20,10 @@ individual checks and the formatting command; run the full suite for Python chan
 just check
 ```
 
+Use `just test-local` for the PostgreSQL-independent tests in `tests/local/`.
+The full suite also runs `tests/integration/`; see
+[test database setup](README.md#development) before running it.
+
 Tests use local fixtures, AG2's scripted test configuration, and mocked Telegram
 requests. Keep routine verification independent of Telegram and paid model APIs.
 For documentation-only changes, verify links and run `git diff --check`.
@@ -115,8 +119,8 @@ of embeddings. Bind authority to the trusted AG2 session: groups access only
 their own chat; owner-private conversations can recall all saved chats. Model
 filters only narrow access. Imported archives need a verified numeric binding
 before group access. Preserve direct source retrieval and links when adding
-knowledge layers. Before changing the legacy OpenViking adapter, export or
-benchmark, read [its experiment guide](evals/suites/openviking/README.md).
+knowledge layers. Before changing the legacy OpenViking adapter or export, read
+[the original memory ADR](docs/adr/0001-openviking-memory.md).
 
 Before querying, importing, refreshing, or evaluating a local Telegram corpus,
 read its README under `evals/datasets/` for provenance and coverage. Entire

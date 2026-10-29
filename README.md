@@ -348,8 +348,50 @@ GitHub Actions runs the development checks on pushes to `main` and pull requests
 Tests and package builds run on Python 3.12, 3.13, and 3.14 without live Telegram
 or model API calls. PostgreSQL integration tests use a disposable schema per test.
 Set `TEST_DATABASE_URL` to an isolated pgvector-enabled test database before
-running `just check`; CI provisions it automatically. Without this variable,
-PostgreSQL integration tests are skipped. Never point it at application data.
+running `just test` or `just check`; CI provisions it automatically. The full
+suite fails immediately if this variable is missing. Never point it at
+application data.
+
+Run `just test-local` for the PostgreSQL-independent tests under `tests/local/`.
+These include focused model, delivery and formatting checks, plus legacy
+SQLite/OpenViking checks with local fixtures and mocked SDK requests.
+`tests/integration/` exercises real PostgreSQL storage and dispatcher scenarios,
+including group access, activation and delivered-message capture. Both sets run
+with `just test`; each test belongs to one set.
+
+Both commands use pytest with pytest-cov and report line and branch coverage for
+`src/dashulya/`, including missing lines. The suite uses pytest assertions and
+fixtures, with pytest-asyncio running async tests in a separate event loop per
+test. Coverage records each test's context; HTML reports show which tests executed
+a line. The `ctrace` core keeps these contexts available on Python 3.14,
+whose default `sysmon` core does not support them. No minimum coverage threshold
+is enforced. For an HTML report, run
+`uv run --locked --no-dev --group test python -m pytest --cov-report=html` with
+`TEST_DATABASE_URL` set, then open `htmlcov/index.html`. Coverage data and reports
+are ignored by Git.
+
+The test dependency group includes [dirty-equals](https://dirty-equals.helpmanual.io/)
+for nested expectations and [Hypothesis](https://hypothesis.readthedocs.io/)
+for generated cases such as Unicode chunking. Write Hypothesis tests as ordinary
+pytest functions so repeated in-process runs keep the same executor. Keep original text, identities,
+scope and collection sizes exact. Use partial dictionary matchers only for fields
+outside the behavior being tested; constrain variable values such as durations.
+
+Run `just mutate` for mutation testing with
+[mutmut](https://mutmut.readthedocs.io/en/latest/). It mutates `src/dashulya/` and
+uses both test sets, so `TEST_DATABASE_URL` must point to an isolated test
+database. To focus a run, pass a quoted mutant pattern, for example
+`just mutate 'dashulya.ai.addressing.*'`. Use `just mutmut results` to list
+stored outcomes and `just mutmut browse` to inspect mutants interactively.
+Results and generated source copies stay in the ignored `mutants/` directory;
+later runs reuse them. Coverage collection is disabled during mutation runs.
+Mutation testing is separate from `just check` and CI. Run it on Linux or macOS;
+Windows requires WSL because mutmut uses fork.
+
+Coverage overlap identifies candidates for consolidation, not redundant tests.
+Inspect their assertions and surviving mutants, then compare the same mutations
+after a change. Distinguish behavioral gaps from equivalent mutations and timing
+failures; a selected mutation score does not establish complete test coverage.
 
 Architecture, development commands, and reference bot repositories live in
 [AGENTS.md](AGENTS.md). The [repository layout](docs/design/repository-layout.md)

@@ -39,10 +39,42 @@ lint = [
 ]
 dev = [
     {include-group = "lint"},
+    {include-group = "test"},
+    {include-group = "mutation"},
+]
+test = [
+    "dirty-equals>=0.11,<1",
+    "hypothesis>=6,<7",
+    "pytest>=9,<10",
+    "pytest-asyncio>=1.4,<2",
+    "pytest-cov>=7,<8",
+]
+mutation = [
+    {include-group = "test"},
+    "mutmut>=3.8,<4",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
+addopts = ["--cov=dashulya", "--cov-branch", "--cov-context=test", "--cov-report=term-missing"]
+
+[tool.coverage.run]
+# The sysmon core on Python 3.14 cannot record per-test contexts.
+core = "ctrace"
+
+[tool.coverage.html]
+show_contexts = true
+
+[tool.mutmut]
+source_paths = ["src/dashulya/"]
+pytest_add_cli_args = ["--no-cov"]
+pytest_add_cli_args_test_selection = ["tests/"]
+
 [tool.mypy]
-files = ["src/dashulya", "tests", "evals/suites"]
+files = ["src/dashulya", "tests"]
 strict = true
 python_version = "3.12"
 strict_bytes = true

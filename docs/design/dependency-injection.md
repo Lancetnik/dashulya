@@ -245,8 +245,11 @@ scripted configurations as well as real provider configurations. Focused tests
 may call AI factories and domain modules without a container; injected tools
 are exercised through the real AG2 integration.
 
-`tests/test_dependencies.py` exercises framework scope entry, concurrent AG2
-turns, per-tool finalization, cancellation, production startup, and cleanup.
+`tests/local/test_dependencies.py` exercises shared agents, model settings,
+concurrent AG2 turns, per-tool finalization, cancellation, and partial startup
+failure without PostgreSQL. `tests/integration/test_dependencies.py` exercises
+Telegram event scopes, production startup, readiness, and resource cleanup with
+the real database.
 Dispatcher tests combine injection with access, tracking, routing, and delivery.
 Memory tests execute injected tools through real AG2 with scripted or
 mock-transport model responses. They check scope isolation, edit shadowing,

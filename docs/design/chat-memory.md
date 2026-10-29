@@ -312,9 +312,8 @@ data directory.
 
 Immutable source snapshots stay under ignored `evals/datasets/`; isolated
 indices/results stay under `evals/runs/`. Offline SQLite/OpenViking maintenance
-commands remain available through `python -m dashulya.memory` and the
-[legacy experiment guide](../../evals/suites/openviking/README.md). Neither
-legacy engine is in the application's runtime dependency graph.
+commands remain available through `python -m dashulya.memory`. Neither legacy
+engine is in the application's runtime dependency graph.
 
 ## Limits
 

@@ -48,7 +48,7 @@ format:
 
 # Type-check source and tests in strict mode.
 mypy:
-    just _lint mypy
+    uv run --locked --no-dev --group lint --group test mypy
 
 # Check the architecture contracts.
 import-linter:
@@ -58,9 +58,23 @@ import-linter:
 lock-check:
     uv lock --check
 
-# Run tests without contacting Telegram or OpenAI.
+# Run local tests, including legacy SQLite, without PostgreSQL or remote requests.
+test-local:
+    uv run --locked --no-dev --group test python -m pytest tests/local
+
+# Run all tests against an isolated TEST_DATABASE_URL, without Telegram or OpenAI.
 test:
-    uv run --locked python -m unittest discover -s tests -v
+    uv run --locked --no-dev --group test python -m tests.postgres
+    uv run --locked --no-dev --group test python -m pytest
+
+# Run mutation tests against an isolated TEST_DATABASE_URL; accepts mutant patterns.
+mutate *args:
+    uv run --locked --no-dev --group mutation python -m tests.postgres
+    uv run --locked --no-dev --group mutation mutmut run {{args}}
+
+# Inspect mutation results, for example: just mutmut results or just mutmut browse.
+mutmut *args:
+    uv run --locked --no-dev --group mutation mutmut {{args}}
 
 # Run all development checks.
 check: lock-check hygiene secrets typos lint mypy import-linter test

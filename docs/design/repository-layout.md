@@ -8,6 +8,8 @@ Keep project design, evaluation infrastructure and application state separate.
 | `docs/adr/` | Accepted decisions, rationale and trade-offs | Yes |
 | `deploy/` | Service configuration consumed by Compose | Yes, with environment references for secrets |
 | `preview/` | Local, read-only reply context prototype | Yes |
+| `tests/local/` | Tests independent of PostgreSQL, including offline SQLite fixtures | Yes |
+| `tests/integration/` | Real PostgreSQL storage and dispatcher integration tests | Yes |
 | `evals/suites/` | Evaluation runners, case contracts and scoring rules | Yes |
 | `evals/datasets/` | Entire local datasets, including descriptions, manifests, cases and annotations | No |
 | `evals/runs/` | Generated exports, isolated indices and evaluation results | No |

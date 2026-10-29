@@ -64,10 +64,10 @@ ignore = [
 [lint.per-file-ignores]
 # Dishka discovers factories as provider instance methods.
 "src/dashulya/main/providers/*.py" = ["PLR6301"]
-# Existing unittest tests intentionally use unittest assertions and dynamic fixtures.
+# Test fixtures use dynamic attributes and synthetic inputs.
 "tests/**/*.py" = [
     "ANN", "S", "ARG001", "PLR6301", "PLC2701", "PLR0904", "PLR0914",
-    "PT009", "PT027", "PT030", "PLC1901", "RUF045",
+    "PLC1901", "RUF045",
 ]
 # Dishka closes generator providers when their scope exits.
 "src/dashulya/main/providers/telegram.py" = ["ASYNC119"]

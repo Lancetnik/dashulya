@@ -24,6 +24,12 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+mutants/
 .ruff_cache/
 .mypy_cache/
 .import_linter_cache/
