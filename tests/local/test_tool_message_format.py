@@ -25,7 +25,7 @@ from dashulya.domain.memory import (
     OriginalMessage,
     ReplyContext,
 )
-from dashulya.domain.messages import Reply
+from dashulya.domain.messages import Reply, ReplyRequest
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from tests.support import (
@@ -406,12 +406,14 @@ class TestToolMessageRoundtrip:
         dialogue = Dialogue(agent, history=history, bot_id=123)
         with patch.object(agent, "ask", wraps=agent.ask) as ask:
             await dialogue.reply(
-                (-100123, None),
-                current.text,
-                user_id=99,
-                user_name="Alice",
-                sent_at=current.sent_at,
-                group_context={"message_id": 3},
+                ReplyRequest(
+                    (-100123, None),
+                    current.text,
+                    user_id=99,
+                    user_name="Alice",
+                    sent_at=current.sent_at,
+                    message_id=3,
+                )
             )
         stream = ask.call_args.kwargs["stream"]
         rendered = "\n".join(

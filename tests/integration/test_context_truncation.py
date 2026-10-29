@@ -11,6 +11,7 @@ from dashulya.ai.dialogue import Dialogue
 from dashulya.ai.message_format import MessageFormatter
 from dashulya.database import Database
 from dashulya.domain.memory import MemoryAccess, MemoryMessage
+from dashulya.domain.messages import ReplyRequest
 from dashulya.memory.history import CanonicalHistory
 from dashulya.memory.store import MessageStore
 from tests.support import group_records, group_rows, reply_json
@@ -169,12 +170,14 @@ class TestContextTruncation:
         agent_ask = AsyncMock(wraps=agent.ask)
         with patch.object(agent, "ask", agent_ask):
             result = await dialogue.reply(
-                (GROUP, None),
-                "Current request",
-                user_id=42,
-                user_name="Alice",
-                sent_at=NOW,
-                group_context={"message_id": 30},
+                ReplyRequest(
+                    (GROUP, None),
+                    "Current request",
+                    user_id=42,
+                    user_name="Alice",
+                    sent_at=NOW,
+                    message_id=30,
+                )
             )
         assert result.reply_to_message_id is None
         stream = agent_ask.call_args.kwargs["stream"]

@@ -62,8 +62,14 @@ pgvector and SQL BM25, then bounded RRF in Python. Cancelled SQL returns its
 connection safely to the pool.
 
 `AgentProvider` supplies the same store and an application-scoped `MessageFormatter`
-to `Dialogue` and the memory tools. The formatter receives `BOT_TIMEZONE` and the
-actual Telegram bot ID; it owns no chat authority or mutable conversation state.
+to `Dialogue` and the memory tools. It also injects `ContextImages`, an alias of
+`TelegramImages`, into `Dialogue` once. `ReplyDelivery` converts each authorized
+Telegram message into a typed `ReplyRequest`, including already downloaded current
+and direct-reply images. `Dialogue` selects fresh group context using the request's
+chat identity and resolves saved images through `ContextImages`; callers supply
+neither context dictionaries nor per-turn loading callbacks. Private requests
+retain their in-memory stream. History and turn locks stay together in `Dialogue`.
+The formatter receives `BOT_TIMEZONE` and the actual Telegram bot ID; it owns no chat authority or mutable conversation state.
 The provider adapts optional `OWNER_AUTHOR_IDS` into explicit sender-to-user
 authorship bindings for the formatter. These affect presentation only, not
 sender authorization or memory access. No binding is inferred from names.

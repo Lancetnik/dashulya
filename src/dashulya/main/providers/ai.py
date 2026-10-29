@@ -20,6 +20,7 @@ from dashulya.ai.tools.web import create_web_tools
 from dashulya.domain.memory import (
     ChatHistory,
     ChatMemoryService,
+    ContextImages,
     HistoryReader,
     MemoryAccess,
     MemoryBackend,
@@ -120,12 +121,14 @@ class AgentProvider(Provider):
         agent: Agent[Reply],
         history: ChatHistory,
         formatter: MessageFormatter,
+        context_images: ContextImages,
     ) -> Dialogue:
         return Dialogue(
             agent,
             history=history,
             max_image_bytes=IMAGE_MAX_BYTES,
             formatter=formatter,
+            context_images=context_images,
         )
 
     @provide

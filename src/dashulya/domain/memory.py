@@ -3,7 +3,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
-from dashulya.domain.messages import ConversationKey, ImageFile
+from dashulya.domain.messages import (
+    ConversationKey,
+    ImageAttachment,
+    ImageFile,
+    ImageOmission,
+)
 
 
 def message_source_id(collection: str, message_id: int) -> str:
@@ -205,3 +210,14 @@ class ChatMemoryService(Protocol):
     def recall(self, access: MemoryAccess) -> MemoryBackend: ...
 
     def history(self, access: MemoryAccess) -> HistoryReader: ...
+
+
+class ContextImages(Protocol):
+    """Resolve saved visual inputs from the exact selected reply context."""
+
+    async def load_context(
+        self,
+        messages: tuple[MemoryMessage, ...],
+        *,
+        images: tuple[ImageAttachment | ImageOmission, ...] = (),
+    ) -> tuple[ImageAttachment | ImageOmission, ...]: ...

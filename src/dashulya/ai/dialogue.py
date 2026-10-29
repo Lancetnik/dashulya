@@ -1,10 +1,9 @@
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import cast
 
 from ag2 import Agent, MemoryStream
 from ag2.events import (
@@ -21,6 +20,7 @@ from dashulya.ai.message_format import MessageFormatter, format_local_time
 from dashulya.ai.tools.reactions import ReactionTurn
 from dashulya.domain.memory import (
     ChatHistory,
+    ContextImages,
     MemoryAccess,
     MemoryMessage,
     ReplyContext,
@@ -30,13 +30,10 @@ from dashulya.domain.messages import (
     ImageAttachment,
     ImageOmission,
     Reply,
+    ReplyRequest,
 )
 
 logger = logging.getLogger(__name__)
-
-ImageLoader = Callable[
-    [tuple[MemoryMessage, ...]], Awaitable[tuple[ImageAttachment | ImageOmission, ...]]
-]
 
 
 @dataclass
@@ -56,11 +53,13 @@ class Dialogue:
         bot_id: int | None = None,
         max_image_bytes: int = 20_000_000,
         formatter: MessageFormatter | None = None,
+        context_images: ContextImages | None = None,
     ) -> None:
         self._agent = agent
         self._formatter = formatter or MessageFormatter(timezone, bot_id)
         self._timezone = self._formatter.timezone
         self._history = history
+        self._context_images = context_images
         self._max_image_bytes = max_image_bytes
         self._conversations: dict[ConversationKey, Conversation] = {}
 
@@ -253,51 +252,46 @@ class Dialogue:
                     recent.append({"role": "assistant", "text": event.content[:1000]})
             return recent[-10:]
 
-    async def reply(
-        self,
-        key: ConversationKey,
-        text: str,
-        *,
-        user_id: int,
-        user_name: str,
-        sent_at: datetime,
-        group_context: dict[str, object] | None = None,
-        message_id: int | None = None,
-        images: tuple[ImageAttachment | ImageOmission, ...] = (),
-        image_loader: ImageLoader | None = None,
-    ) -> Reply:
-        message = self._text(text, sent_at=sent_at, user_id=user_id, user_name=user_name)
+    async def reply(self, request: ReplyRequest) -> Reply:
+        key = request.key
+        message_id = request.message_id
+        images = request.images
+        message = self._text(
+            request.text,
+            sent_at=request.sent_at,
+            user_id=request.user_id,
+            user_name=request.user_name,
+        )
         async with self._conversation(key).lock:
             stream = self._conversation(key).stream
             allowed_reply_ids: set[int] = set()
-            if group_context is not None:
-                if not isinstance(group_context.get("message_id"), int):
+            if key[0] < 0:
+                if message_id is None:
                     error_message = "Group replies require a Telegram message ID."
                     raise ValueError(error_message)
-                message_id = cast("int", group_context["message_id"])
-                parent = group_context.get("reply_to")
-                parent = parent.get("message_id") if isinstance(parent, dict) else None
                 stream, message, selected = await self._group_input(
                     key,
                     MemoryMessage(
                         key[0],
                         message_id,
-                        text,
-                        sent_at,
-                        user_id,
-                        user_name,
+                        request.text,
+                        request.sent_at,
+                        request.user_id,
+                        request.user_name,
                         "",
                         thread_id=key[1],
-                        reply_to_id=parent if isinstance(parent, int) else None,
+                        reply_to_id=request.reply_to_id,
                     ),
                 )
                 allowed_reply_ids = {item.message_id for item in selected}
-                if image_loader is not None:
-                    images = await image_loader(selected)
+                if self._context_images is not None:
+                    images = await self._context_images.load_context(
+                        selected, images=images
+                    )
             elif message_id is not None:
                 message += f"\nTelegram message ID: {message_id}"
             image_inputs = self._image_inputs(
-                images, allowed_reply_ids if group_context is not None else None
+                images, allowed_reply_ids if key[0] < 0 else None
             )
             await self._trim_images(
                 stream,
@@ -311,7 +305,7 @@ class Dialogue:
                 access = MemoryAccess(
                     chat_id=key[0],
                     is_private=key[0] > 0,
-                    before=sent_at,
+                    before=request.sent_at,
                     before_id=message_id,
                 )
                 reactions = ReactionTurn()
@@ -319,7 +313,7 @@ class Dialogue:
                     message,
                     *image_inputs,
                     stream=stream,
-                    variables={"user_id": user_id, "chat_id": key[0]},
+                    variables={"user_id": request.user_id, "chat_id": key[0]},
                     dependencies={"memory_access": access, "reaction_turn": reactions},
                 )
                 result = await reply.content()
@@ -338,17 +332,17 @@ class Dialogue:
             else:
                 validated = Reply(result.text.strip())
                 target_reason = "outside_context"
-            if group_context is not None:
+            if key[0] < 0:
                 logger.info(
                     "Group reply target selected",
                     extra={
                         "chat_id": key[0],
-                        "message_id": group_context["message_id"],
+                        "message_id": message_id,
                         "requested_reply_to_message_id": result.reply_to_message_id
                         if result is not None
                         else None,
                         "reply_to_message_id": validated.reply_to_message_id
-                        or group_context["message_id"],
+                        or message_id,
                         "reply_target_reason": target_reason,
                         "context_message_ids": sorted(allowed_reply_ids),
                     },

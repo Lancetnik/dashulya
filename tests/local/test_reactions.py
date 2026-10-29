@@ -34,7 +34,7 @@ from dashulya.ai.tools.reactions import ReactionTurn
 from dashulya.bot.chat_actions import typing
 from dashulya.bot.reactions import TelegramReactions
 from dashulya.bot.replies import ReplyDelivery
-from dashulya.domain.messages import Reply
+from dashulya.domain.messages import Reply, ReplyRequest
 from dashulya.domain.reactions import ReactionResult
 from dashulya.main import create_container
 from dashulya.main.config import Settings
@@ -84,13 +84,14 @@ class TestReaction:
 
     async def reply(self, dialogue: Dialogue, chat_id: int = -123) -> Reply:
         return await dialogue.reply(
-            (chat_id, None),
-            "Please react",
-            user_id=42,
-            user_name="Anna",
-            sent_at=SENT_AT,
-            message_id=10,
-            group_context={"message_id": 10} if chat_id < 0 else None,
+            ReplyRequest(
+                (chat_id, None),
+                "Please react",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                message_id=10,
+            )
         )
 
     async def deliver(self, *turns: Turn, chat_id: int = -123) -> None:
@@ -109,9 +110,7 @@ class TestReaction:
             "from": {"id": 42, "is_bot": False, "first_name": "Anna"},
             "text": "Please react",
         }).as_(self.bot)
-        await delivery.reply(
-            message, group_context={"message_id": 10} if chat_id < 0 else None
-        )
+        await delivery.reply(message)
 
     def reactions(self) -> list[SetMessageReaction]:
         return [

@@ -16,7 +16,7 @@ from dashulya.domain.memory import (
     MemoryAccess,
     MemoryBackend,
 )
-from dashulya.domain.messages import Reply
+from dashulya.domain.messages import Reply, ReplyRequest
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from tests.support import TEST_API_KEY, MemoryOverride, ModelOverrides, reply_json
@@ -52,13 +52,14 @@ class TestDialogueRecall:
     @staticmethod
     async def reply(dialogue: Dialogue, *, chat_id: int = 42) -> Reply:
         return await dialogue.reply(
-            (chat_id, None),
-            "Current request",
-            user_id=42,
-            user_name="Owner",
-            sent_at=NOW,
-            message_id=2,
-            group_context={"message_id": 2} if chat_id < 0 else None,
+            ReplyRequest(
+                (chat_id, None),
+                "Current request",
+                user_id=42,
+                user_name="Owner",
+                sent_at=NOW,
+                message_id=2,
+            )
         )
 
     async def test_private_and_group_followups_do_not_read_memory_without_tool_calls(

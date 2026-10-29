@@ -1,5 +1,4 @@
 import logging
-from functools import partial
 from time import perf_counter
 
 from aiogram import Bot
@@ -10,7 +9,7 @@ from dashulya.bot.chat_actions import typing
 from dashulya.bot.formatting import render_markdown
 from dashulya.bot.images import ImageInputError, TelegramImages
 from dashulya.bot.messages import conversation_key
-from dashulya.domain.messages import ImageAttachment, ImageOmission
+from dashulya.domain.messages import ImageAttachment, ImageOmission, ReplyRequest
 from dashulya.observability import exception_fields
 
 logger = logging.getLogger(__name__)
@@ -27,14 +26,9 @@ class ReplyDelivery:
         self._dialogue = dialogue
         self._images = images
 
-    async def reply(
-        self,
-        message: Message,
-        *,
-        group_context: dict[str, object] | None = None,
-    ) -> None:
+    async def reply(self, message: Message) -> None:
         async with self._dialogue.delivery(conversation_key(message)):
-            await self._reply(message, group_context=group_context)
+            await self._reply(message)
 
     async def _load_images(
         self, message: Message
@@ -51,9 +45,7 @@ class ReplyDelivery:
         )
         return images
 
-    async def _reply(
-        self, message: Message, *, group_context: dict[str, object] | None
-    ) -> None:
+    async def _reply(self, message: Message) -> None:
         # Owner access and addressing have already succeeded before any download.
         assert message.from_user is not None
         started = perf_counter()
@@ -67,21 +59,20 @@ class ReplyDelivery:
             try:
                 images = await self._load_images(message)
                 reply = await self._dialogue.reply(
-                    conversation_key(message),
-                    message.text
-                    or message.caption
-                    or "Please respond to this media in the context of our conversation.",
-                    user_id=message.from_user.id,
-                    user_name=message.from_user.full_name,
-                    sent_at=message.date,
-                    message_id=message.message_id,
-                    group_context=group_context,
-                    images=images,
-                    image_loader=(
-                        partial(self._images.load_context, images=images)
-                        if group_context is not None
-                        else None
-                    ),
+                    ReplyRequest(
+                        conversation_key(message),
+                        message.text
+                        or message.caption
+                        or "Please respond to this media in the context of our conversation.",
+                        user_id=message.from_user.id,
+                        user_name=message.from_user.full_name,
+                        sent_at=message.date,
+                        message_id=message.message_id,
+                        images=images,
+                        reply_to_id=message.reply_to_message.message_id
+                        if message.reply_to_message is not None
+                        else None,
+                    )
                 )
                 text = reply.text
                 reply_to_message_id = reply.reply_to_message_id or message.message_id

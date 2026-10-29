@@ -14,7 +14,7 @@ from ag2.config import OpenAIDecisionsConfig, OpenAIResponsesConfig
 from dashulya.ai.addressing import GroupAddressing
 from dashulya.ai.dialogue import Dialogue
 from dashulya.domain.memory import ChatHistory, MemoryMessage, ReplyContext
-from dashulya.domain.messages import GroupMessage, ImageAttachment, Reply
+from dashulya.domain.messages import GroupMessage, ImageAttachment, Reply, ReplyRequest
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.memory.search import MemorySearch
@@ -112,13 +112,17 @@ class TestAgentAPI:
             dialogue = await container.get(Dialogue)
             for message_id in (3, 4):
                 result = await dialogue.reply(
-                    (-123, None),
-                    f"Current request {message_id}",
-                    user_id=42,
-                    user_name="Anna",
-                    sent_at=datetime(2026, 10, 25, tzinfo=UTC),
-                    group_context={"message_id": message_id},
-                    images=(ImageAttachment(b"native-image", "image/png", message_id),),
+                    ReplyRequest(
+                        (-123, None),
+                        f"Current request {message_id}",
+                        user_id=42,
+                        user_name="Anna",
+                        sent_at=datetime(2026, 10, 25, tzinfo=UTC),
+                        images=(
+                            ImageAttachment(b"native-image", "image/png", message_id),
+                        ),
+                        message_id=message_id,
+                    )
                 )
                 assert result == Reply("Fresh answer", 1)
         assert len(requests) == 2
@@ -322,11 +326,13 @@ class TestAgentAPI:
             self.cleanup.push_async_callback(container.close)
             dialogue = await container.get(Dialogue)
             reply = await dialogue.reply(
-                (42, None),
-                "Search redis",
-                user_id=42,
-                user_name="Anna",
-                sent_at=datetime(2026, 10, 25, tzinfo=UTC),
+                ReplyRequest(
+                    (42, None),
+                    "Search redis",
+                    user_id=42,
+                    user_name="Anna",
+                    sent_at=datetime(2026, 10, 25, tzinfo=UTC),
+                )
             )
 
         assert reply == Reply("No matches in the snapshot.")

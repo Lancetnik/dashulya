@@ -34,6 +34,25 @@ class ImageOmission:
 
 
 @dataclass(frozen=True)
+class ReplyRequest:
+    """One authorized message and its already downloaded visual inputs.
+
+    Negative chat IDs select fresh group context; positive IDs retain private
+    history. Group requests require message_id. Reply parents refer to originals
+    in that conversation, never to an independent snapshot supplied by a caller.
+    """
+
+    key: ConversationKey
+    text: str
+    user_id: int
+    user_name: str
+    sent_at: datetime
+    message_id: int | None = None
+    reply_to_id: int | None = None
+    images: tuple[ImageAttachment | ImageOmission, ...] = ()
+
+
+@dataclass(frozen=True)
 class AddressingDecision:
     should_reply: bool
     reason: Literal[

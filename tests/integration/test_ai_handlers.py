@@ -15,7 +15,7 @@ from aiogram.types import File, Message, Update, User
 from dashulya.database import Database
 from dashulya.domain.groups import Group
 from dashulya.domain.memory import MessageRecorder
-from dashulya.domain.messages import ImageOmission, Reply
+from dashulya.domain.messages import ImageOmission, Reply, ReplyRequest
 from dashulya.main import create_container
 from dashulya.main.config import Settings
 from dashulya.storage.groups import GroupStore
@@ -172,15 +172,14 @@ class TestAIHandler(_AIHandlerFixture):
     async def test_private_text_invokes_dialogue_and_replies_as_plain_text(self) -> None:
         await self.message("Hi")
         self.dialogue.reply.assert_awaited_once_with(
-            (42, None),
-            "Hi",
-            user_id=42,
-            user_name="Anna",
-            sent_at=datetime.fromtimestamp(1700000000, UTC),
-            message_id=1,
-            group_context=None,
-            images=(),
-            image_loader=None,
+            ReplyRequest(
+                (42, None),
+                "Hi",
+                user_id=42,
+                user_name="Anna",
+                sent_at=datetime.fromtimestamp(1700000000, UTC),
+                message_id=1,
+            )
         )
         self.decision_agent.ask.assert_not_awaited()
         reply = self.replies()[-1]
@@ -289,7 +288,7 @@ class TestAIHandler(_AIHandlerFixture):
             entities=[{"type": "mention", "offset": 3, "length": 13}],
         )
         assert self.dialogue.reply.await_count == 3
-        assert self.dialogue.reply.call_args.args[0] == (-123, 7)
+        assert self.dialogue.reply.call_args.args[0].key == (-123, 7)
         assert len(self.replies()) == 3
         self.decision_agent.ask.assert_not_awaited()
 
@@ -302,9 +301,10 @@ class TestAIHandler(_AIHandlerFixture):
         )
         self.decision_agent.ask.assert_not_awaited()
         self.dialogue.reply.assert_awaited_once()
-        context = self.dialogue.reply.call_args.kwargs["group_context"]
-        assert context["reply_to"]["sender_id"] == BOT_USER["id"]
-        assert context["reply_to"]["text"] == "Hi"
+        request = self.dialogue.reply.call_args.args[0]
+        assert request.key == (-123, None)
+        assert request.message_id == 1
+        assert request.reply_to_id == 100
         reply_parameters = self.replies()[-1].reply_parameters
         assert reply_parameters is not None
         assert reply_parameters.message_id == 1
@@ -344,7 +344,7 @@ class TestAIHandler(_AIHandlerFixture):
         key = self.dialogue.recent_context.call_args.args[0]
         context = json.loads(self.decision_agent.ask.call_args.args[0])["current_message"]
         assert key == (-123, None)
-        assert self.dialogue.reply.call_args.args[0] == key
+        assert self.dialogue.reply.call_args.args[0].key == key
         assert context["text"] == "DASHULYA, help"
         assert context["sender_id"] == 42
 
@@ -534,11 +534,11 @@ class TestAIHandler(_AIHandlerFixture):
             },
         ):
             await self.message(**fields)
-            image = self.dialogue.reply.call_args.kwargs["images"][0]
+            image = self.dialogue.reply.call_args.args[0].images[0]
             assert image.data == PNG
             assert image.media_type == "image/png"
         assert self.dialogue.reply.await_count == 2
-        assert self.dialogue.reply.call_args.args[1] == "Read the text"
+        assert self.dialogue.reply.call_args.args[0].text == "Read the text"
         self.decision_agent.ask.assert_not_awaited()
 
     async def test_caption_mentions_and_names_preserve_group_addressing(self) -> None:
@@ -576,7 +576,7 @@ class TestAIHandler(_AIHandlerFixture):
                 "photo": PHOTO,
             },
         )
-        images = self.dialogue.reply.call_args.kwargs["images"]
+        images = self.dialogue.reply.call_args.args[0].images
         assert images[0].message_id == 100
         assert images[0].data == PNG
 
@@ -587,7 +587,7 @@ class TestAIHandler(_AIHandlerFixture):
         self.get_file.assert_not_awaited()
         self.download.assert_not_called()
         self.dialogue.reply.assert_awaited_once()
-        assert self.dialogue.reply.call_args.kwargs["images"] == (ImageOmission(1),)
+        assert self.dialogue.reply.call_args.args[0].images == (ImageOmission(1),)
 
     async def test_image_download_failure_does_not_expose_token(
         self, caplog: pytest.LogCaptureFixture
@@ -618,12 +618,12 @@ class TestAIHandler(_AIHandlerFixture):
                 "thumbnail": {**PHOTO[0], "file_id": "thumbnail"},
             }
             await self.message(sticker=sticker)
-            images = self.dialogue.reply.call_args.kwargs["images"]
+            images = self.dialogue.reply.call_args.args[0].images
             assert images[0].preview_kind == (
                 "sticker" if format_flag is not None else None
             )
             assert (
-                self.dialogue.reply.call_args.args[1]
+                self.dialogue.reply.call_args.args[0].text
                 == "Please respond to this media in the context of our conversation."
             )
         assert self.dialogue.reply.await_count == 3
@@ -681,14 +681,12 @@ class TestAIHandler(_AIHandlerFixture):
             },
         )
         assert self.dialogue.reply.await_count == 2
-        assert self.dialogue.reply.call_args.kwargs["images"][0].message_id == 101
+        assert self.dialogue.reply.call_args.args[0].images[0].message_id == 101
         assert self.get_file.await_args_list[-1].args == ("thumbnail",)
 
     async def test_private_and_caption_addressed_gif_use_animation_previews(self) -> None:
         await self.message(animation=ANIMATION)
-        assert (
-            self.dialogue.reply.call_args.kwargs["images"][0].preview_kind == "animation"
-        )
+        assert self.dialogue.reply.call_args.args[0].images[0].preview_kind == "animation"
         await self.message(
             chat=GROUP,
             animation=ANIMATION,
@@ -721,11 +719,11 @@ class TestAIHandler(_AIHandlerFixture):
                 "animation": ANIMATION,
             },
         )
-        assert self.dialogue.reply.call_args.kwargs["images"][0].message_id == 100
+        assert self.dialogue.reply.call_args.args[0].images[0].message_id == 100
         self.get_file.reset_mock()
         await self.message(animation={**ANIMATION, "thumbnail": None})
         self.get_file.assert_awaited_once_with("animation")
-        assert self.dialogue.reply.call_args.kwargs["images"] == (
+        assert self.dialogue.reply.call_args.args[0].images == (
             ImageOmission(self.update_id, "decode_failed"),
         )
 
@@ -826,9 +824,9 @@ class TestPublicGroupHandler(_AIHandlerFixture):
             entities=[{"type": "mention", "offset": 0, "length": 13}],
         )
         self.dialogue.reply.assert_awaited_once()
-        assert self.dialogue.reply.call_args.args[0] == (-123, None)
-        assert self.dialogue.reply.call_args.kwargs["user_id"] == 99
-        assert self.dialogue.reply.call_args.kwargs["user_name"] == "Boris"
+        assert self.dialogue.reply.call_args.args[0].key == (-123, None)
+        assert self.dialogue.reply.call_args.args[0].user_id == 99
+        assert self.dialogue.reply.call_args.args[0].user_name == "Boris"
         self.decision_agent.ask.assert_not_awaited()
         assert self.replies()[-1].chat_id == -123
 

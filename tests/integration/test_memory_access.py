@@ -17,17 +17,19 @@ from dishka_ag2 import AG2Provider, AG2Scope
 
 from dashulya.ai.agents.models import AgentModels
 from dashulya.ai.dialogue import Dialogue
+from dashulya.bot.images import TelegramImages
 from dashulya.database import Database
 from dashulya.domain.memory import (
     ChatHistory,
     ChatMemoryService,
+    ContextImages,
     HistoryReader,
     MemoryAccess,
     MemoryBackend,
     MemoryMessage,
 )
-from dashulya.domain.messages import Reply
-from dashulya.main.config import Settings
+from dashulya.domain.messages import Reply, ReplyRequest
+from dashulya.main.config import IMAGE_MAX_BYTES, Settings
 from dashulya.main.providers.ai import AgentProvider
 from dashulya.memory.history import CanonicalHistory
 from dashulya.memory.store import MessageStore
@@ -101,6 +103,10 @@ class _Dependencies(Provider):
     @provide(override=True)
     def models(self) -> AgentModels:
         return AgentModels(reply=self.config, decision=TestConfig("false"))
+
+    @provide
+    def context_images(self, bot: Bot) -> ContextImages:
+        return TelegramImages(bot, max_bytes=IMAGE_MAX_BYTES)
 
     @provide
     async def bot(self) -> AsyncIterator[Bot]:
@@ -249,22 +255,26 @@ class TestMemoryAccessIntegration:
         )
         dialogue = await container.get(Dialogue)
         await dialogue.reply(
-            (GROUP, None),
-            "Group question",
-            user_id=42,
-            user_name="Owner",
-            sent_at=NOW,
-            group_context={"message_id": 2},
+            ReplyRequest(
+                (GROUP, None),
+                "Group question",
+                user_id=42,
+                user_name="Owner",
+                sent_at=NOW,
+                message_id=2,
+            )
         )
         first = config.calls[0].dependencies["memory_access"]
         assert first == MemoryAccess(GROUP, False, before=NOW, before_id=2)
         await dialogue.reply(
-            (42, None),
-            "Private question",
-            user_id=42,
-            user_name="Owner",
-            sent_at=NOW,
-            message_id=9,
+            ReplyRequest(
+                (42, None),
+                "Private question",
+                user_id=42,
+                user_name="Owner",
+                sent_at=NOW,
+                message_id=9,
+            )
         )
         second = config.calls[-1].dependencies["memory_access"]
         assert second == MemoryAccess(42, True, before=NOW, before_id=9)

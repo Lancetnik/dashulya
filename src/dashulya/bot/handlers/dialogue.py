@@ -93,7 +93,7 @@ async def group_chat(
         },
     )
     if decision.should_reply:
-        await delivery.reply(message, group_context=incoming.context())
+        await delivery.reply(message)
 
 
 @inject

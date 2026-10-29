@@ -24,6 +24,7 @@ from dashulya.domain.messages import (
     ImageAttachment,
     ImageOmission,
     Reply,
+    ReplyRequest,
 )
 from dashulya.main import create_container
 from dashulya.main.config import Settings
@@ -76,11 +77,9 @@ class TestDialogue:
     ) -> str:
         return (
             await self.dialogue.reply(
-                key,
-                text,
-                user_id=user_id,
-                user_name="Anna",
-                sent_at=sent_at,
+                ReplyRequest(
+                    key, text, user_id=user_id, user_name="Anna", sent_at=sent_at
+                )
             )
         ).text
 
@@ -127,13 +126,14 @@ class TestDialogue:
             ),
         ))
         await self.dialogue.reply(
-            (-1002391257796, None),
-            "Link?",
-            user_id=42,
-            user_name="Anna",
-            sent_at=SENT_AT,
-            message_id=19735,
-            group_context={"message_id": 19735},
+            ReplyRequest(
+                (-1002391257796, None),
+                "Link?",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                message_id=19735,
+            )
         )
         requests = await self.requests(self.last_stream())
         line = next(
@@ -191,17 +191,26 @@ class TestDialogue:
         assert "01:30:00 (UTC-05:00)" in requests[1]
         assert all("America/New_York" not in request for request in requests)
 
-    async def test_send_time_requires_explicit_timezone(self) -> None:
-        with pytest.raises(ValueError, match="timezone"):
-            await self.reply(
+    async def test_invalid_request_never_invokes_model(
+        self, subtests: pytest.Subtests
+    ) -> None:
+        for key, sent_at, error in (
+            (
                 (42, None),
-                sent_at=datetime(2026, 10, 25, 12, 0, tzinfo=None),  # ruff: ignore[call-datetime-without-tzinfo] -- Exercise rejection of naive timestamps.
-            )
-        self.ask.assert_not_awaited()
+                datetime(2026, 10, 25, 12, 0, tzinfo=None),  # ruff: ignore[call-datetime-without-tzinfo] -- Exercise rejection of naive timestamps.
+                "timezone",
+            ),
+            ((-123, None), SENT_AT, "message ID"),
+        ):
+            with subtests.test(key=key, error=error):
+                with pytest.raises(ValueError, match=error):
+                    await self.reply(key, sent_at=sent_at)
+                self.ask.assert_not_awaited()
+                self.history.context.assert_not_awaited()
 
     async def test_chats_and_topics_have_isolated_histories(self) -> None:
         streams = []
-        for key in ((42, None), (43, None), (-123, 1), (-123, 2)):
+        for key in ((42, None), (43, None), (42, 1), (42, 2)):
             await self.reply(key, str(key))
             streams.append(self.last_stream())
         assert len({stream.id for stream in streams}) == 4
@@ -264,29 +273,31 @@ class TestDialogue:
             "couldn't generate"
             in (
                 await empty.reply(
-                    (42, None), "Hi", user_id=42, user_name="Anna", sent_at=SENT_AT
+                    ReplyRequest(
+                        (42, None), "Hi", user_id=42, user_name="Anna", sent_at=SENT_AT
+                    )
                 )
             ).text
         )
 
     async def test_recent_context_is_isolated_and_does_not_modify_history(self) -> None:
-        await self.reply((-123, 7), "Remember this discussion")
+        await self.reply((42, 7), "Remember this discussion")
         stream = self.last_stream()
-        recent = await self.dialogue.recent_context((-123, 7))
+        recent = await self.dialogue.recent_context((42, 7))
         assert "Remember this discussion" in recent[0]["text"]
         assert recent[1] == {"role": "assistant", "text": reply_json("AI answer")}
         assert len(await self.requests(stream)) == 1
-        assert await self.dialogue.recent_context((-123, 8)) == []
+        assert await self.dialogue.recent_context((42, 8)) == []
 
     async def test_recent_context_is_bounded_and_clear_removes_it(self) -> None:
         for number in range(7):
-            await self.reply((-123, None), f"{number}:" + "x" * 2000)
-        recent = await self.dialogue.recent_context((-123, None))
+            await self.reply((42, None), f"{number}:" + "x" * 2000)
+        recent = await self.dialogue.recent_context((42, None))
         assert len(recent) == 10
         for entry in recent:
             assert len(entry["text"]) <= 1000
-        await self.dialogue.clear((-123, None))
-        assert await self.dialogue.recent_context((-123, None)) == []
+        await self.dialogue.clear((42, None))
+        assert await self.dialogue.recent_context((42, None)) == []
 
     async def test_recent_context_waits_for_reply_while_other_conversations_progress(
         self,
@@ -300,11 +311,11 @@ class TestDialogue:
             return cast("AgentReply[str, Reply]", await self.real_ask(text, **kwargs))
 
         self.ask.side_effect = blocked_ask
-        task = asyncio.create_task(self.reply((-123, 7), "Blocked"))
+        task = asyncio.create_task(self.reply((42, 7), "Blocked"))
         await started.wait()
-        reading = asyncio.create_task(self.dialogue.recent_context((-123, 7)))
+        reading = asyncio.create_task(self.dialogue.recent_context((42, 7)))
         try:
-            await asyncio.wait_for(self.reply((-123, 8)), timeout=2)
+            await asyncio.wait_for(self.reply((42, 8)), timeout=2)
             assert not reading.done()
         finally:
             release.set()
@@ -324,18 +335,16 @@ class TestDialogue:
                 thread_id=7,
             ),
         ))
-        context: dict[str, object] = {
-            "message_id": 2,
-            "text": "What do you mean?",
-            "reply_to": {"message_id": 1, "text": "Earlier message", "sender_id": 123},
-        }
         await self.dialogue.reply(
-            (-123, 7),
-            "What do you mean?",
-            user_id=42,
-            user_name="Anna",
-            sent_at=SENT_AT,
-            group_context=context,
+            ReplyRequest(
+                (-123, 7),
+                "What do you mean?",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                message_id=2,
+                reply_to_id=1,
+            )
         )
         stream = self.last_stream()
         request = (await self.requests(stream))[-1]
@@ -397,12 +406,14 @@ class TestDialogue:
                 ),
             ))
             await self.dialogue.reply(
-                (-123, None),
-                f"Request {number}",
-                user_id=42,
-                user_name="Anna",
-                sent_at=SENT_AT,
-                group_context={"message_id": number},
+                ReplyRequest(
+                    (-123, None),
+                    f"Request {number}",
+                    user_id=42,
+                    user_name="Anna",
+                    sent_at=SENT_AT,
+                    message_id=number,
+                )
             )
             stream = self.last_stream()
             streams.append(stream)
@@ -482,12 +493,14 @@ class TestDialogue:
                 caplog.clear()
                 with caplog.at_level("INFO", logger="dashulya.ai.dialogue"):
                     result = await dialogue.reply(
-                        (-123, None),
-                        "Current request",
-                        user_id=42,
-                        user_name="Anna",
-                        sent_at=SENT_AT,
-                        group_context={"message_id": 5},
+                        ReplyRequest(
+                            (-123, None),
+                            "Current request",
+                            user_id=42,
+                            user_name="Anna",
+                            sent_at=SENT_AT,
+                            message_id=5,
+                        )
                     )
                 assert any(
                     record.name == "dashulya.ai.dialogue"
@@ -513,11 +526,7 @@ class TestDialogue:
             TestConfig(reply_json("Private answer", 999)), tools=[]
         )
         result = await Dialogue(agent).reply(
-            (42, None),
-            "Hi",
-            user_id=42,
-            user_name="Anna",
-            sent_at=SENT_AT,
+            ReplyRequest((42, None), "Hi", user_id=42, user_name="Anna", sent_at=SENT_AT)
         )
         assert result == Reply("Private answer")
 
@@ -527,15 +536,19 @@ class TestDialogue:
         dialogue = Dialogue(self.agent, max_image_bytes=5)
         for message_id, data in ((1, b"123"), (2, b"45"), (3, b"678")):
             await dialogue.reply(
-                (42, None),
-                "Inspect",
-                user_id=42,
-                user_name="Anna",
-                sent_at=SENT_AT,
-                images=(ImageAttachment(data, "image/png", message_id),),
+                ReplyRequest(
+                    (42, None),
+                    "Inspect",
+                    user_id=42,
+                    user_name="Anna",
+                    sent_at=SENT_AT,
+                    images=(ImageAttachment(data, "image/png", message_id),),
+                )
             )
         await dialogue.reply(
-            (42, None), "Compare", user_id=42, user_name="Anna", sent_at=SENT_AT
+            ReplyRequest(
+                (42, None), "Compare", user_id=42, user_name="Anna", sent_at=SENT_AT
+            )
         )
         events = list(await self.last_stream().history.get_events())
         binary = [
@@ -567,16 +580,18 @@ class TestDialogue:
             ),
         ))
         await self.dialogue.reply(
-            (-123, None),
-            "Inspect",
-            user_id=42,
-            user_name="Anna",
-            sent_at=SENT_AT,
-            group_context={"message_id": 2},
-            images=(
-                ImageAttachment(b"selected", "image/png", 1),
-                ImageAttachment(b"excluded", "image/png", 999),
-            ),
+            ReplyRequest(
+                (-123, None),
+                "Inspect",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                images=(
+                    ImageAttachment(b"selected", "image/png", 1),
+                    ImageAttachment(b"excluded", "image/png", 999),
+                ),
+                message_id=2,
+            )
         )
         parts = [
             part
@@ -690,15 +705,16 @@ class TestDialogue:
         )
         bot = AsyncMock(spec=Bot)
         images = TelegramImages(bot, max_bytes=20_000_000)
+        dialogue = Dialogue(
+            self.agent, history=self.history, bot_id=123, context_images=images
+        )
         png = b"\x89PNG\r\n\x1a\nimage-data"
         with (
             patch.object(images, "_read", AsyncMock(return_value=png)) as download,
             patch.object(Message, "answer", AsyncMock()),
             patch("dashulya.bot.images.first_frame", return_value=b"frame"),
         ):
-            await ReplyDelivery(bot, self.dialogue, images).reply(
-                request, group_context={"message_id": 2}
-            )
+            await ReplyDelivery(bot, dialogue, images).reply(request)
         parts = [
             part
             for event in await self.last_stream().history.get_events()
@@ -718,12 +734,14 @@ class TestDialogue:
         dialogue = Dialogue(self.agent, max_image_bytes=1)
         with pytest.raises(ValueError, match="byte budget"):
             await dialogue.reply(
-                (42, None),
-                "Inspect",
-                user_id=42,
-                user_name="Anna",
-                sent_at=SENT_AT,
-                images=(ImageAttachment(b"12", "image/png", 1),),
+                ReplyRequest(
+                    (42, None),
+                    "Inspect",
+                    user_id=42,
+                    user_name="Anna",
+                    sent_at=SENT_AT,
+                    images=(ImageAttachment(b"12", "image/png", 1),),
+                )
             )
         self.ask.assert_not_awaited()
 
@@ -731,12 +749,14 @@ class TestDialogue:
         self,
     ) -> None:
         await self.dialogue.reply(
-            (42, None),
-            "Read this",
-            user_id=42,
-            user_name="Anna",
-            sent_at=SENT_AT,
-            images=(ImageOmission(1),),
+            ReplyRequest(
+                (42, None),
+                "Read this",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                images=(ImageOmission(1),),
+            )
         )
         text = "\n".join(await self.requests(self.last_stream()))
         assert "Telegram message ID: 1 omitted" in text
@@ -752,18 +772,20 @@ class TestDialogue:
         self,
     ) -> None:
         await self.dialogue.reply(
-            (42, None),
-            "What is this sticker?",
-            user_id=42,
-            user_name="Anna",
-            sent_at=SENT_AT,
-            images=(
-                ImageAttachment(b"preview", "image/webp", 1, preview_kind="sticker"),
-                ImageOmission(2, "preview_unavailable"),
-                ImageAttachment(
-                    b"gif-preview", "image/jpeg", 3, preview_kind="animation"
+            ReplyRequest(
+                (42, None),
+                "What is this sticker?",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                images=(
+                    ImageAttachment(b"preview", "image/webp", 1, preview_kind="sticker"),
+                    ImageOmission(2, "preview_unavailable"),
+                    ImageAttachment(
+                        b"gif-preview", "image/jpeg", 3, preview_kind="animation"
+                    ),
                 ),
-            ),
+            )
         )
         text = "\n".join(await self.requests(self.last_stream()))
         assert "only a static sticker thumbnail" in text
@@ -785,17 +807,23 @@ class TestDialogue:
         self,
     ) -> None:
         await self.dialogue.reply(
-            (42, None),
-            "Please respond to this media in the context of our conversation.",
-            user_id=42,
-            user_name="Anna",
-            sent_at=SENT_AT,
-            images=(
-                ImageAttachment(
-                    b"first", "image/jpeg", 1, preview_kind="animation", first_frame=True
+            ReplyRequest(
+                (42, None),
+                "Please respond to this media in the context of our conversation.",
+                user_id=42,
+                user_name="Anna",
+                sent_at=SENT_AT,
+                images=(
+                    ImageAttachment(
+                        b"first",
+                        "image/jpeg",
+                        1,
+                        preview_kind="animation",
+                        first_frame=True,
+                    ),
+                    ImageOmission(2, "decode_failed"),
                 ),
-                ImageOmission(2, "decode_failed"),
-            ),
+            )
         )
         events = await self.last_stream().history.get_events()
         parts = [
