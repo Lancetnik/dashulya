@@ -52,11 +52,15 @@ records the storage decision. `ChatMemoryService` binds trusted `MemoryAccess`
 to separate recall and canonical readers for each AG2 session.
 
 `MemoryProvider` shares the store and persistent `EmbeddingCache`, and owns the
-OpenAI embedding client. `HybridChatMemory` owns background preparation and
-bounded metadata engines. Startup attempts preparation; provider failures retain
-queued work. Finalization cancels/joins the worker and waits for active retrieval
-leases before the client and database pool close. Completed batches and pending
-revisions survive restarts. SQL operations use async pooled connections; only
+OpenAI embedding client. `HybridChatMemory` assembles three internal modules:
+`IndexingWorker` owns preparation and retries, `EngineCache` owns bounded metadata engines and retrieval
+leases, and `ScopedRecall` reads and renders one authorized snapshot. Preparation
+announces completed batches to invalidate cached engines without depending on
+retrieval internals. Canonical history remains independent of indexing.
+Startup attempts preparation; provider failures retain queued work. Finalization
+cancels/joins the worker first, then drains active retrieval leases before the
+client and database pool close. Completed batches and pending revisions survive
+restarts. SQL operations use async pooled connections; only
 metadata construction/fingerprinting runs in CPU threads. Ranking uses native
 pgvector and SQL BM25, then bounded RRF in Python. Cancelled SQL returns its
 connection safely to the pool.

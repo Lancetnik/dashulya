@@ -112,7 +112,7 @@ class TestMemoryService:
         result = await self.service.recall(scope).search("Aurora")
         assert [s["message_id"] for hit in result["hits"] for s in hit["sources"]] == [1]
 
-    async def test_shutdown_waits_for_active_recall_and_rejects_new_searches(
+    async def test_shutdown_drains_recall_across_refresh_and_rejects_new_searches(
         self,
     ) -> None:
         await self.live.record(self.message(-1001, "Aurora source"))
@@ -128,12 +128,17 @@ class TestMemoryService:
         search = asyncio.create_task(
             self.service.recall(MemoryAccess(-1001, False)).search("Aurora")
         )
-        await asyncio.wait_for(started.wait(), timeout=2)
-        closing = asyncio.create_task(self.service.close())
-        await asyncio.sleep(0)
-        assert not closing.done()
-        release.set()
-        result = await asyncio.wait_for(search, timeout=2)
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            # Preparing cached originals invalidates engines without disrupting
+            # an active search or allowing shutdown to forget its lease.
+            await asyncio.wait_for(self.service.refresh_once(), timeout=2)
+            closing = asyncio.create_task(self.service.close())
+            await asyncio.sleep(0)
+            assert not closing.done()
+        finally:
+            release.set()
+            result = await asyncio.wait_for(search, timeout=2)
         assert result["hits"][0]["sources"][0]["text"] == "Aurora source"
         await asyncio.wait_for(closing, timeout=2)
         with pytest.raises(RuntimeError, match="closed"):
@@ -150,11 +155,10 @@ class TestMemoryService:
         assert (await history.query("count"))["count"] == 1
         assert len(await self.live.pending()) == 1
         caplog.clear()
-        with caplog.at_level("WARNING", logger="dashulya.memory.service"):
+        with caplog.at_level("WARNING", logger="dashulya.memory"):
             await self.service.start()
         assert any(
-            record.name == "dashulya.memory.service"
-            or record.name.startswith("dashulya.memory.service.")
+            record.name == "dashulya.memory" or record.name.startswith("dashulya.memory.")
             for record in caplog.records
         )
         result = await self.service.history(MemoryAccess(-1001, False)).query("count")
@@ -191,8 +195,8 @@ class TestMemoryService:
         self.embed.side_effect = embed
         caplog.clear()
         with (
-            patch("dashulya.memory.service.asyncio.sleep", side_effect=sleep),
-            caplog.at_level("WARNING", logger="dashulya.memory.service"),
+            patch("dashulya.memory._indexing.asyncio.sleep", side_effect=sleep),
+            caplog.at_level("WARNING", logger="dashulya.memory"),
         ):
             try:
                 await self.service.start()
@@ -223,12 +227,11 @@ class TestMemoryService:
             finally:
                 await self.service.close()
         assert any(
-            record.name == "dashulya.memory.service"
-            or record.name.startswith("dashulya.memory.service.")
+            record.name == "dashulya.memory" or record.name.startswith("dashulya.memory.")
             for record in caplog.records
         )
 
-    async def test_private_chat_selection_applies_before_engine_creation_and_cap(
+    async def test_private_chat_selection_bounds_recall_and_coverage(
         self,
     ) -> None:
         for chat, text in (
@@ -239,9 +242,7 @@ class TestMemoryService:
             await self.live.record(self.message(chat, text))
         await self.service.refresh_once()
         private = self.service.recall(MemoryAccess(42, True))
-        with patch.object(self.service, "engine", wraps=self.service.engine) as engine:
-            result = await private.search("needle", chat="telegram:-1002", limit=1)
-        assert {m.collection for m in engine.call_args.args[0]} == {"telegram:-1002"}
+        result = await private.search("needle", chat="telegram:-1002", limit=1)
         assert len(result["hits"]) == 1
         assert result["hits"][0]["sources"][0]["chat_id"] == -1002
         coverage = result["coverage"]

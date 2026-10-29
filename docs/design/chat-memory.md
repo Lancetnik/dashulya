@@ -260,9 +260,13 @@ over the authorized snapshot, then applies optional candidate filters. Unicode
 diversity operate on the bounded candidate rankings in Python; vectors are never
 loaded for a Python scan. Metadata/block construction runs off the event loop.
 
-An application-owned worker prepares current message/reply-block payloads using
-bounded provider batches. Completed batches persist across cancellation and
-restarts. Acknowledgement covers only the captured revision; newer edits remain
+`HybridChatMemory` coordinates internal modules with separate responsibilities:
+`_indexing.IndexingWorker` prepares current message/reply-block payloads using
+bounded provider batches; `_engines.EngineCache` leases bounded metadata engines;
+`_recall.ScopedRecall` handles authorized recall and direct source reads. Canonical
+history stays available independently of all three. Completed preparation
+invalidates engines for new searches while active leases finish on their snapshot.
+Completed batches persist across cancellation and restarts. Acknowledgement covers only the captured revision; newer edits remain
 pending. The worker checks pending work every two seconds and pauses after
 failures. Provider errors are redacted. Old content-addressed postings/vectors
 can remain cached but do not participate without authorized current block keys.
