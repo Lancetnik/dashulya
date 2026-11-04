@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from asyncio import sleep as _sleep
 from contextlib import suppress
 
 from dashulya.memory.search_index import SearchIndex
@@ -46,7 +47,7 @@ class IndexingWorker:
 
     async def _run(self) -> None:
         while True:
-            await asyncio.sleep(2)
+            await _sleep(2)
             try:
                 if (
                     self._needs_refresh
@@ -57,7 +58,7 @@ class IndexingWorker:
             except Exception as error:
                 # Provider text may contain source data or credentials.
                 logger.warning("Memory indexing failed (%s)", type(error).__name__)
-                await asyncio.sleep(10)
+                await _sleep(10)
 
     async def close(self) -> None:
         if self._worker is not None:
