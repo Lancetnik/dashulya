@@ -7,7 +7,7 @@ from ag2.middleware import Middleware
 from ag2.middleware.base import MiddlewareFactory
 from ag2.tools.tool import Tool
 
-from dashulya.ai.agents.tracing import ReplyTrace
+from dashulya.ai.agents.tracing import ReplyTrace, log_builtin_tool
 from dashulya.ai.prompts import (
     CHARACTER_PROMPT,
     GROUP_ADDRESSING_PROMPT,
@@ -73,4 +73,5 @@ def create_reply_agent(
             description="Up to three ordered Telegram messages: text or a Dashulya sticker. For messages to the same person, set reply_to_message_id only on the first. Null targets the incoming request on the first output and sends without a reply on later outputs.",
         ),
         middleware=[Middleware(ReplyTrace), *middleware],
+        observers=[log_builtin_tool],
     )

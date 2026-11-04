@@ -17,3 +17,5 @@ extend-exclude = [
 [default.extend-words]
 # Ruff copyright rule family.
 CPY = "CPY"
+# False positive rate in classifier evaluation.
+fpr = "fpr"

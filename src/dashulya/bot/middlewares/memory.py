@@ -13,18 +13,28 @@ from aiogram.types import Message, TelegramObject, Update
 
 from dashulya.bot.messages import capture_message
 from dashulya.bot.presentation import rich_html_text
+from dashulya.domain.groups import GroupRegistry
 from dashulya.domain.memory import MessageRecorder
 
 
 class CaptureMessagesMiddleware(BaseMiddleware):
     def __init__(
-        self, recorder: MessageRecorder, *, owner_user_id: int | None = None
+        self,
+        recorder: MessageRecorder,
+        groups: GroupRegistry,
+        *,
+        owner_user_id: int | None = None,
     ) -> None:
         self._recorder = recorder
+        self._groups = groups
         self._owner_user_id = owner_user_id
 
     async def capture(self, message: Message, event_update: Update | None = None) -> None:
         private = message.chat.type == ChatType.PRIVATE
+        if message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            group = await self._groups.get(message.chat.id)
+            if group is None or not group.capture_enabled:
+                return
         if private and (
             self._owner_user_id is None
             or message.from_user is None
@@ -58,9 +68,14 @@ class CaptureMessagesMiddleware(BaseMiddleware):
 
 class CaptureSentMessagesMiddleware(BaseRequestMiddleware):
     def __init__(
-        self, recorder: MessageRecorder, *, owner_user_id: int | None = None
+        self,
+        recorder: MessageRecorder,
+        groups: GroupRegistry,
+        *,
+        owner_user_id: int | None = None,
     ) -> None:
         self._recorder = recorder
+        self._groups = groups
         self._owner_user_id = owner_user_id
 
     async def __call__(
@@ -73,6 +88,10 @@ class CaptureSentMessagesMiddleware(BaseRequestMiddleware):
         if isinstance(response, Message) and isinstance(
             method, (SendMessage, SendRichMessage, SendSticker)
         ):
+            if response.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}:
+                group = await self._groups.get(response.chat.id)
+                if group is None or not group.capture_enabled:
+                    return response
             text = (
                 method.text
                 if isinstance(method, SendMessage)

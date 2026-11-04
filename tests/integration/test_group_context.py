@@ -451,7 +451,7 @@ class TestGroupContext:
             )
         ).messages
         assert [m.author_id for m in saved] == [42, 123]
-        assert "Here's what I can do" in saved[-1].text
+        assert "Вот что я умею" in saved[-1].text
         self.ask.assert_not_awaited()
 
     async def test_delivery_boundary_serializes_same_conversation_only(self) -> None:
@@ -671,7 +671,7 @@ class TestGroupContext:
             if isinstance(call.args[1], SendMessage)
         ]
         assert len(sends) == 1
-        assert "couldn't get an AI reply" in sends[0].text
+        assert "не удалось подготовить ответ" in sends[0].text
         assert "sk-secret" not in sends[0].text
         assert sends[0].reply_parameters is not None
         assert sends[0].reply_parameters.message_id == trigger.message_id

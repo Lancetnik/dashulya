@@ -418,7 +418,7 @@ class TestHistoryImages:
             "image_url": "data:image/png;base64," + base64.b64encode(self.image).decode(),
         }
         for schema in requests[0]["tools"]:
-            if schema["name"] in {"chat_history", "search_memory"}:
+            if schema.get("name") in {"chat_history", "search_memory"}:
                 assert "chat" not in schema["parameters"]["properties"]
                 assert "image_turn" not in schema["parameters"]["properties"]
                 assert all(
@@ -431,7 +431,7 @@ class TestHistoryImages:
                     assert {"format": "date-time", "type": "string"} in schema[
                         "parameters"
                     ]["properties"][bound]["anyOf"]
-            if schema["name"] == "chat_history":
+            if schema.get("name") == "chat_history":
                 assert set(schema["parameters"]["properties"]) == {"sql"}
                 field = schema["parameters"]["properties"]["sql"]
                 assert field["type"] == "array"

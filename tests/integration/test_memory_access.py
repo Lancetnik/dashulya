@@ -11,6 +11,7 @@ import pytest
 from ag2 import Agent, MemoryStream
 from ag2.events import ToolCallEvent, ToolResultEvent
 from ag2.testing import TestConfig, TrackingConfig
+from ag2.tools.final.function_tool import FunctionToolSchema
 from aiogram import Bot
 from aiogram.types import File
 from dishka import Provider, make_async_container, provide
@@ -357,8 +358,12 @@ class TestMemoryAccessIntegration:
         assert "Private secret" not in rendered
         assert [kind for kind, _ in self.service.bound] == ["recall", "history"]
         assert all((bound is access for _, bound in self.service.bound))
-        assert len(config.calls[0].tools) == 3
-        schemas = repr(config.calls[0].tools)
+        schemas = [
+            asdict(schema)
+            for schema in config.calls[0].tools
+            if isinstance(schema, FunctionToolSchema)
+        ]
+        assert len(schemas) == 3
         for name in (
             "is_private",
             "user_id",
@@ -371,8 +376,8 @@ class TestMemoryAccessIntegration:
             "memory",
         ):
             # Inspect actual JSON schema properties, not tool names/descriptions.
-            for schema in config.calls[0].tools:
-                properties = asdict(schema)["function"]["parameters"]["properties"]
+            for schema in schemas:
+                properties = schema["function"]["parameters"]["properties"]
                 assert name not in properties, schemas
 
     async def test_foreign_direct_source_id_is_unavailable_in_both_tools(self) -> None:

@@ -44,14 +44,17 @@ and [Ostrikov's chat](https://t.me/aostrikov_agents_chat)
   rules; substantive questions still receive text.
 - **Find earlier discussions.** Recall saved originals by keywords and meaning,
   with original Telegram links and surrounding replies.
-- **Save received messages.** Persist group messages from all participants and
-  the owner's private messages, including edits and successfully delivered replies.
+- **Save received messages.** After the owner's first `/start` in a group, persist
+  its participants' messages, including edits and successfully delivered replies.
+  The owner's private messages are also saved.
 - **Inspect original history.** Read full sources, page through saved messages,
   resolve sender identities and count literal matches independently of embeddings.
   Reading a saved image message also supplies its picture or media preview from
   cache or Telegram when a file reference is available.
 - **Search the web.** With `KEENABLE_API_KEY` configured, find current public information
   through Keenable and read source pages, with links in the answer.
+- **Run Python calculations.** Use OpenAI's hosted Code Interpreter through
+  AG2's [built-in `CodeExecutionTool`](https://docs.ag2.ai/docs/user-guide/tools/builtin_tools/#code-execution).
 - **Keep track of groups.** List groups the bot has observed, preserving the
   registry across restarts.
 
@@ -80,31 +83,69 @@ records the storage decision.
 
 | Command | What happens |
 | --- | --- |
+| `/help` | See the available commands and how to use them |
+| `/clear` | Reset the current private conversation |
+| `/groups` | List the groups she knows about |
 | `/start` | Meet Dashulya; activate replies in the current group |
 | `/stop` | Owner or chat admins pause replies in the current group; keep saving messages |
-| `/help` | See the available commands and how to use them |
-| `/groups` | List the groups she knows about |
-| `/clear` | Reset the current private conversation |
+| `/settings` | Owner or chat admins independently select who can use ordinary replies and whispers |
+| `/ban @username` | Owner or chat admins stop a user from triggering replies in this group |
+| `/unban @username` | Owner or chat admins restore a user's ability to trigger replies in this group |
+
+Bot service messages are in Russian. `/help` groups commands for the private
+conversation, group management and participant restrictions.
 
 Private conversations and commands are available only to the configured owner,
-except group `/stop`, which is also available to that group's administrators.
+except group `/stop`, `/ban`, `/unban` and `/settings`, which are also available to that group's administrators.
 Every group starts inactive. The owner enables replies with `/start` (or
-`/start@<bot_username>`) in that group. While inactive, the owner can use `/start`
-and `/stop`; chat administrators can use `/stop`. Sending
-`/start` privately or in another group does not activate it. `/groups` shows each
+`/start@<bot_username>`) in that group. While inactive, the owner can use `/start`,
+`/stop`, `/ban`, `/unban` and `/settings`; chat administrators can use `/stop`, `/ban`, `/unban` and `/settings`. Sending `/start`
+privately or in another group does not activate it. `/groups` shows each
 group's activation status. Activation survives restarts, name changes and
 supergroup migration; removing and re-adding the bot requires a new `/start`.
 Groups already known before this feature also start inactive after upgrading.
 The owner or a chat administrator can pause replies in that group, across topics,
 with `/stop` or `/stop@<bot_username>`. Only the owner can resume with `/start`.
 `/stop` works only in group chats; repeating it confirms the pause.
-Group tracking, message capture and indexing continue while replies are inactive.
+Before the owner's first `/start` in a group, received messages, edits, reply
+snapshots and outgoing responses are neither saved nor queued for indexing.
+Group metadata is still tracked. After that first activation, capture and
+indexing continue through every `/stop` and subsequent `/start`, across restarts
+and supergroup migration. Removing the bot resets this permission.
+On upgrade, currently active groups retain capture; paused groups need one
+owner `/start` because their prior activation was not recorded separately.
+
+Use `/settings` in a group to choose the audience independently for ordinary
+replies (`all` or `admins`) and `/whisper` (`all`, `admins` or `disabled`). For
+example, only administrators can ask publicly while everyone can whisper.
+Both default to everyone; the configured bot owner is also allowed in `admins`
+mode. The blacklist and group pause apply to both modes, and disabling whispers
+also blocks the owner. Settings work across topics, persist through restarts and
+supergroup migration, and can be changed while paused. `/start` resumes with the
+saved settings. Removing and re-adding the bot restores defaults. Button presses
+check the presser's current rights in that group.
 
 Administrator rights are checked against Telegram's current list for that chat;
-failed checks deny access. Anonymous administrators can stop replies when Telegram's
+failed checks deny access. Anonymous administrators can use `/stop`, `/ban` and `/unban` when Telegram's
 `sender_chat` matches the current group's numeric ID.
 
-In any group activated by the owner, all human participants may address the bot.
+Use `/ban @username` (or `/ban@<bot_username> @username`). Lookups ignore case and
+use each human sender's latest saved username in this group. Unknown, outdated or
+ambiguous usernames require a new message from that participant before retrying.
+The ban binds to their numeric ID, so changing their username does not remove it.
+The blacklist applies across topics in this group, survives restarts and
+supergroup migration, and is removed when the bot leaves the group.
+Repeating the command is harmless. Banned users' mentions, replies and name-based
+requests do not invoke the classifier or reply model. Their messages continue to
+be saved and can appear in context and memory. Other groups and private access
+are unaffected. Administrative commands remain available to authorized senders.
+
+Use `/unban @username` to remove a ban in this group, using the participant's
+latest saved username. The same rights and lookup rules apply as for `/ban`.
+Repeating `/unban` is harmless, and the removal persists across restarts.
+Unbanning does not activate a paused group or remove anyone else's ban.
+
+In any group activated by the owner, human participants outside its blacklist may address the bot.
 Private messages, an explicit @mention of the bot, and replies to its messages
 start an AI conversation directly. Other commands remain owner-only in enabled groups.
 
@@ -250,8 +291,8 @@ repeating that declaration. Repeated local hours include a numeric UTC offset
 to distinguish their occurrences. The application computes the weekday. `BOT_TIMEZONE`
 defaults to `Europe/Moscow` and accepts IANA timezone names. Log timestamps
 remain in UTC.
-Logs correlate model and tool calls with the triggering chat/message. Each tool
-has start/end events with its name, call ID, duration and outcome; model events
+Logs correlate model and tool calls with the triggering chat/message. Function tools
+have start/end events with their name, call ID, duration and outcome; model events
 include timings, input/output/reasoning token counts when supplied, and input
 image counts. Successful model-call events also include the raw `agent_output`,
 `message_count` from its JSON `messages` list (null when unavailable), and
@@ -259,6 +300,12 @@ image counts. Successful model-call events also include the raw `agent_output`,
 JSON or an oversized message list; model-call success does not imply valid output.
 `AI reply validation failed` records validation error types and field paths.
 Schema rejection does not automatically request another model response.
+An AG2 observer logs provider-hosted tools, including Code Interpreter, as
+`AI builtin tool call observed` and `AI builtin tool result observed`, with
+`tool_name`, `tool_call_id`, chat/message IDs and `tool_status` when supplied.
+These events arrive with the provider response and do not measure execution
+duration. Code and tool results stay excluded. `tool_call_count` counts only
+function tools; builtin calls have their own observer records.
 Media loading and Telegram delivery have separate timings. Generated and
 delivered replies record their message count; delivery also records the number
 of confirmed Telegram chunks. `AI reply delivery failed` distinguishes `render`
@@ -408,7 +455,8 @@ For recording ordinary group messages and name-based addressing, make the bot
 an administrator, or
 [disable privacy mode](https://core.telegram.org/bots/features#privacy-mode)
 through @BotFather and re-add the bot. Telegram does not deliver other bots'
-messages to it. All received group participants' messages are saved, alongside
+messages to it. After the owner's first `/start`, received group participants'
+messages are saved, alongside
 owner-private messages and delivered replies; commands and replies remain
 restricted to the owner. Text, captions and basic attachment metadata are
 retained; passive capture does not download attachment contents. Authorized

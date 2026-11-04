@@ -10,7 +10,7 @@ from dashulya.ai.dialogue import Dialogue
 from dashulya.bot.chat_actions import typing
 from dashulya.bot.formatting import render_markdown
 from dashulya.bot.images import ImageInputError, TelegramImages
-from dashulya.bot.messages import conversation_key
+from dashulya.bot.messages import conversation_key, message_text
 from dashulya.bot.presentation import collapse_entities
 from dashulya.bot.stickers import TelegramStickers
 from dashulya.domain.messages import ImageAttachment, ImageOmission, Reply, ReplyRequest
@@ -71,15 +71,19 @@ class ReplyDelivery:
             "message_id": message.message_id,
         }
         logger.info("AI request started", extra=context)
+        text = message_text(message) or (
+            "Please respond to this media in the context of our conversation."
+        )
+        parent = message.reply_to_message
+        if message.chat.id > 0 and parent is not None and parent.poll is not None:
+            text = f"Reply to poll:\n{message_text(parent)}\n\n{text}"
         async with typing(self._bot, message):
             try:
                 images = await self._load_images(message) if message.chat.id > 0 else ()
                 reply = await self._dialogue.reply(
                     ReplyRequest(
                         conversation_key(message),
-                        message.text
-                        or message.caption
-                        or "Please respond to this media in the context of our conversation.",
+                        text,
                         user_id=message.from_user.id,
                         user_name=message.from_user.full_name,
                         sent_at=message.date,
@@ -113,7 +117,7 @@ class ReplyDelivery:
                 )
                 messages = (
                     Reply(
-                        "I couldn't get an AI reply right now. Please try again in a moment."
+                        "Сейчас не удалось подготовить ответ. Попробуй ещё раз чуть позже."
                     ),
                 )
         if not messages:

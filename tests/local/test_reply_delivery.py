@@ -24,7 +24,7 @@ from dashulya.bot.stickers import TelegramStickers
 from dashulya.domain.memory import MessageRecorder
 from dashulya.domain.messages import ImageOmission, Reply, ReplyBatch
 from dashulya.observability import JsonLogFormatter
-from tests.support import dashulya_sticker_set
+from tests.support import activated_group_registry, dashulya_sticker_set
 
 PRIVATE = {"id": 42, "type": "private", "first_name": "Anna"}
 
@@ -471,7 +471,9 @@ class TestReplyDelivery:
     ) -> None:
         recorded = AsyncMock(spec=MessageRecorder)
         self.bot.session.middleware(
-            CaptureSentMessagesMiddleware(recorded, owner_user_id=42)
+            CaptureSentMessagesMiddleware(
+                recorded, activated_group_registry(), owner_user_id=42
+            )
         )
         original = "Summary.\n\n" + "💋" * 601 + '\n\nprint("<summary> & 💋")'
         self.dialogue.reply.return_value = ReplyBatch((

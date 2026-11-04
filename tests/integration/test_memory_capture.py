@@ -15,10 +15,12 @@ from dashulya.bot.images import TelegramImages
 from dashulya.bot.messages import capture_message
 from dashulya.bot.middlewares.memory import CaptureMessagesMiddleware
 from dashulya.database import Database
+from dashulya.domain.groups import GroupRegistry
 from dashulya.domain.memory import MemoryAccess, MemoryMessage, MessageRecorder
 from dashulya.domain.messages import ImageAttachment, ImageFile
 from dashulya.memory.history import CanonicalHistory
 from dashulya.memory.store import MessageStore
+from dashulya.storage.groups import GroupStore
 
 
 @pytest.mark.usefixtures("_setup")
@@ -269,7 +271,9 @@ class TestMemoryCapture:
 
     async def test_only_actual_owner_private_messages_enter_memory(self) -> None:
         recorder = AsyncMock(spec=MessageRecorder)
-        capture = CaptureMessagesMiddleware(recorder, owner_user_id=42)
+        capture = CaptureMessagesMiddleware(
+            recorder, GroupRegistry(GroupStore(self.database)), owner_user_id=42
+        )
         await capture.capture(self.incoming(99))
         await capture.capture(self.incoming(42, bot=True))
         recorder.record.assert_not_awaited()
@@ -292,7 +296,9 @@ class TestMemoryCapture:
                 },
             }
         )
-        await CaptureMessagesMiddleware(recorder, owner_user_id=42).capture(message)
+        await CaptureMessagesMiddleware(
+            recorder, GroupRegistry(GroupStore(self.database)), owner_user_id=42
+        ).capture(message)
         recorder.record.assert_not_awaited()
 
     async def test_private_metadata_persists_across_store_instances(self) -> None:

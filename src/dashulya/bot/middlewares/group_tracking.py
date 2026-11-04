@@ -25,7 +25,7 @@ class TrackGroupsMiddleware(BaseMiddleware):
         if event.chat.type in GROUP_TYPES:
             group = Group(
                 event.chat.id,
-                event.chat.title or "Untitled group",
+                event.chat.title or "Группа без названия",
                 event.chat.username,
             )
             if (

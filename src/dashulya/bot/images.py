@@ -47,7 +47,7 @@ def _media_type(data: bytes) -> ImageMediaType:
         return "image/png"
     if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
         return "image/webp"
-    error_message = "Please send an image in JPEG, PNG or WebP format."
+    error_message = "Пришли изображение в формате JPEG, PNG или WebP."
     raise ImageInputError(error_message)
 
 
@@ -222,7 +222,7 @@ class TelegramImages:
         )
         _check_size(metadata.file_size or 0, budget.batch.limit)
         if metadata.file_path is None:
-            error_message = "I couldn't download this image. Please send it again."
+            error_message = "Не удалось скачать изображение. Пришли его ещё раз."  # ruff: ignore[ambiguous-unicode-character-string]
             raise FileNotFoundError(error_message)
         expected = (
             None

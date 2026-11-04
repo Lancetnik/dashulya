@@ -18,7 +18,13 @@ from dashulya.bot.replies import ReplyDelivery
 from dashulya.domain.memory import MemoryMessage, MessageRecorder
 from dashulya.main import create_container
 from dashulya.main.config import Settings
-from tests.support import TEST_API_KEY, BotOverride, MemoryOverride, ModelOverrides
+from tests.support import (
+    TEST_API_KEY,
+    BotOverride,
+    MemoryOverride,
+    ModelOverrides,
+    activated_group_registry,
+)
 
 
 @pytest.mark.usefixtures("_setup")
@@ -99,7 +105,11 @@ class TestConcurrentReplies:
         cleanup.enter_context(patch.object(bot.session, "make_request", side_effect=send))
         recorder = AsyncMock(spec=MessageRecorder)
         recorder.record.side_effect = record
-        bot.session.middleware(CaptureSentMessagesMiddleware(recorder, owner_user_id=42))
+        bot.session.middleware(
+            CaptureSentMessagesMiddleware(
+                recorder, activated_group_registry(), owner_user_id=42
+            )
+        )
         http = await cleanup.enter_async_context(
             httpx2.AsyncClient(transport=httpx2.MockTransport(respond))
         )

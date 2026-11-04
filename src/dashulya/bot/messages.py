@@ -9,6 +9,25 @@ from dashulya.domain.memory import MemoryMessage, MessageRecorder
 from dashulya.domain.messages import ConversationKey, ImageFile
 
 
+def message_text(message: Message) -> str:
+    """Project Telegram content into text shared by capture and model inputs."""
+    if message.poll is not None:
+        options = "\n".join(
+            f"{number}. {option.text}"
+            for number, option in enumerate(message.poll.options, start=1)
+        )
+        return f"Poll: {message.poll.question}\nAnswer options:\n{options}"
+    return (
+        message.text
+        or message.caption
+        or (
+            message.rich_message.model_dump_json(exclude_none=True)
+            if message.rich_message
+            else ""
+        )
+    )
+
+
 def _visual_file(
     file: Animation | Document | Sticker,
     *,
@@ -80,19 +99,7 @@ async def capture_message(
         allow_private and message.chat.type == ChatType.PRIVATE
     ):
         return
-    body = (
-        text
-        if text is not None
-        else (
-            message.text
-            or message.caption
-            or (
-                message.rich_message.model_dump_json(exclude_none=True)
-                if message.rich_message
-                else ""
-            )
-        )
-    )
+    body = text if text is not None else message_text(message)
     if not (
         body
         or message.photo

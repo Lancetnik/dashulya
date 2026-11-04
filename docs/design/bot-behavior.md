@@ -4,20 +4,42 @@
 
 Authorize private messages, `/start` and other owner commands using the actual
 sender's numeric `from_user.id == OWNER_USER_ID`. Forwarded identities and
-authorship bindings grant no access. Group `/stop` is also available to the current chat's creator
+authorship bindings grant no access. Group `/stop`, `/ban`, `/unban` and `/settings` are also available to the current chat's creator
 and administrators, checked with `getChatAdministrators` for that chat on each
 request. A failed or timed-out lookup denies access and logs a redacted failure;
 the configured owner's commands do not depend on this lookup.
 
-Anonymous administrators may use `/stop` only when Telegram's authenticated
+Anonymous administrators may use `/stop`, `/ban`, `/unban` and `/settings` only when Telegram's authenticated
 `sender_chat.id` equals the current group's numeric ID. A forwarded identity or
 another sender chat grants no authority. Other bot senders, missing senders and
 unauthorized users are silently ignored before command execution or model
 invocation.
 
-After the owner activates a group, all human participants may invoke group
-dialogue there. Addressing rules still apply. Other group commands remain
+After the owner activates a group, human participants outside its blacklist may
+invoke group dialogue there, subject to its reply audiences. Addressing rules still apply. Other group commands remain
 owner-only.
+
+The owner and current chat administrators may use `/ban @username` in groups,
+including inactive groups, with the same authority checks as `/stop`. Accept
+exactly one `@username` using ASCII letters, digits and underscores, up to 32
+characters after `@`; invalid arguments receive a Russian usage message.
+Resolve usernames without case sensitivity from each human sender's latest saved
+identity in this group. Ignore bot and channel identities; unknown, outdated or
+ambiguous names receive a Russian explanation asking for a new message from
+that participant. Store the ban by numeric user ID so a username change does not
+remove it. Repeated bans are idempotent.
+`/unban @username` removes the resolved sender's ban in the current group, using
+the same authority, argument validation and latest-username lookup. Repeating it
+confirms the removal even when no ban exists. The removal persists across
+restarts, leaves other users and groups unchanged, and does not activate a paused
+group. Both commands accept the bot-qualified form and work while inactive.
+The blacklist is scoped to the group across topics and persists in PostgreSQL.
+Check it before addressing, image loading or reply generation for all human
+senders, including the owner. Authorized administrative commands remain available.
+Capture and saved history remain unchanged; banned users' originals can still
+appear in context and memory. Private access and other groups are unaffected.
+Preserve bans across metadata updates and supergroup migration; remove them when
+the bot departs, along with the group registry entry.
 
 Every group starts inactive, including existing groups on upgrade. Only the
 actual human owner's `/start` in that group activates replies. The bot owner or a
@@ -25,10 +47,44 @@ chat administrator can use `/stop` to pause replies throughout the current group
 across topics. The command confirms the pause even if the group is already
 inactive. `/stop` is group-only; `/start`
 resumes group dialogue. Both activation and deactivation persist across restarts.
-While inactive, the owner may use `/start` and `/stop`, and chat administrators
-may use `/stop`; other commands, addressing decisions and reply generation remain
-silent, including the owner's. Activation grants group dialogue access to all
-human participants.
+While inactive, the owner may use `/start`, `/stop`, `/ban`, `/unban` and `/settings`, and chat administrators
+may use `/stop`, `/ban`, `/unban` and `/settings`; other commands, addressing decisions and reply generation remain
+silent, including the owner's. Activation grants group dialogue access to human
+participants outside the blacklist.
+
+The owner's first `/start` also permanently enables message capture for that
+group. Before it, incoming messages, edits, reply snapshots and outgoing replies
+are not stored or queued for indexing. Later `/stop` and `/start` change replies
+only. Capture permission survives restart, metadata refresh and supergroup
+migration; departure removes it. On upgrade, only currently active groups can
+inherit capture permission; previously paused groups need one owner `/start`.
+
+### Per-group reply audiences
+
+`/settings` opens an inline panel in the current group, including while paused.
+The owner and current group administrators may open it and change its settings.
+Anonymous administrators may open the panel using the same authenticated
+`sender_chat` rule as `/stop`; button presses use the actual human presser's
+current rights. Every press checks authority again in the panel's group, without
+caching administrators. Failed lookups deny the change. No private-chat or
+activation authority is granted.
+
+Ordinary replies have `reply_audience=all|admins`; whispers independently have
+`whisper_audience=all|admins|disabled`. Both default to `all`, including for
+existing groups on upgrade. `admins` includes the group creator, administrators
+and the configured human bot owner. `disabled` blocks whispers even for the
+owner. Activation and the blacklist take precedence over either audience;
+authorized administrative commands remain available. Apply these checks before
+addressing classification, image downloads or generation. Denied requests stay
+silent. Ordinary addressing rules still apply to allowed public requests.
+
+Both settings cover all topics of one group and leave other groups and private
+access unchanged. `/stop` pauses both kinds of reply; `/start` resumes with the
+saved audiences. Metadata refresh, restart and supergroup migration preserve
+the settings; departure removes them, so rejoining restores the default audiences
+and requires owner activation. `/groups` shows nondefault audience restrictions.
+Capture and shared memory continue to include public originals from participants
+who cannot invoke replies; hidden questions remain excluded from shared history.
 
 ## Routing and capture
 
@@ -36,13 +92,21 @@ Authorized private messages and explicit group mentions/replies to this bot
 invoke the reply agent directly. Group messages naming Dashulya, including
 “Дашуль” in any letter case, first pass an AG2 OpenAI Decisions classifier with
 bounded chat/topic context. A negative decision or classifier failure stays silent.
+The classifier favors replying when intent is uncertain. A direct call by name,
+question, request or social remark counts even when the request is infeasible or
+inappropriate; the reply agent handles those limitations. Clearly third-person
+discussion, quoted examples and explicit requests not to answer the current
+message stay silent. A real direct address takes precedence over surrounding
+discussion about the bot.
 `/clear` resets the current private conversation.
 
-Group tracking and message capture run before sender access checks, including
-while a group is inactive. Passive messages update group metadata; membership
-updates also maintain the registry. Save received group messages from all
-participants, owner-private messages and successful deliveries; exclude other
-private senders. Index messages with background cached embeddings. Capture,
+Group tracking runs before sender access checks, including before activation.
+Message capture also precedes sender access, but requires the group's first
+owner activation and continues while replies are paused afterward. Passive
+messages update group metadata; membership updates also maintain the registry.
+In approved groups, save received messages from all participants and successful
+deliveries. Save owner-private messages; exclude other private senders.
+Index saved messages with background cached embeddings. Capture,
 edits and worker recovery follow the
 [incoming-message rules](chat-memory.md#incoming-group-messages).
 

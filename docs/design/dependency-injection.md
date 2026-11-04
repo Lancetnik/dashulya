@@ -37,8 +37,8 @@ domain/
 ```
 
 `domain` has no application or infrastructure imports. `GroupRegistry` owns
-observed group migrations, membership changes, persistent activation, and bounded
-group-list output.
+observed group migrations, membership changes, persistent activation, blacklists,
+and bounded group-list output.
 `storage.groups.GroupStore` implements the asynchronous `GroupRepository` using
 PostgreSQL. `DatabaseProvider` owns the single application-scoped async pool,
 verifies its migration journal and closes it after dependent resources are finalized.
@@ -92,22 +92,37 @@ Incoming/outgoing capture share conversion in `bot/messages.py`. Group messages
 from all participants, owner-private messages and successful deliveries use
 actual Telegram IDs; other private senders are excluded. `TelegramProvider`
 attaches outgoing capture to the shared bot session.
+Both capture middleware instances receive `GroupRegistry` and require the
+group's persisted `capture_enabled` permission before processing originals or
+responses. The first owner `/start` enables it atomically with replies; `/stop`
+leaves it set. Group observations and migration preserve it; departure removes it.
 It supplies `AccessMiddleware` with the owner ID and `GroupRegistry`.
-Private messages, activation and other commands stay owner-only. `/stop` also
-admits the current chat's administrators, verified through the event's Telegram
+Private messages, activation and other commands stay owner-only. `/stop`, `/ban`, `/unban` and `/settings`
+also admit the current chat's administrators, verified through the event's Telegram
 bot using `getChatAdministrators`. Failed lookups deny access; named administrator
 rights are not cached. Telegram's authenticated `sender_chat` for the current
-group allows anonymous administrators to stop replies without granting `/start`.
-Human participants in any
-activated group may proceed to normal addressing; bot/missing senders and
+group allows anonymous administrators to pause replies and manage bans without
+granting `/start`. Human participants in any activated group may proceed to normal
+addressing unless banned; bot/missing senders and
 unauthorized private chats remain silent. Capture and group tracking still
 precede this gate. Activation grants dialogue access within the group without
 expanding memory authority.
 The same gate checks group activation through `GroupRegistry`; inactive groups
-admit the human owner's `/start` and owner/admin `/stop`. These commands persist the
-current group's activation or deactivation in PostgreSQL before confirming it.
+admit the human owner's `/start` and owner/admin `/stop`, `/ban`, `/unban` and `/settings`. `/start` and
+`/stop` persist the current group's activation or deactivation in PostgreSQL
+before confirming it.
 Ordinary observations preserve activation, migration
 transfers it, and departure removes it with the registry entry.
+
+`/ban @username` and `/unban @username` resolve a unique human sender from their latest canonical
+message metadata in the current chat through `GroupRegistry` and `GroupStore`.
+The blacklist stores numeric sender IDs separately from originals and is checked
+before addressing and generation. Administrative commands retain their access.
+The store merges bans during group migration and cascades their deletion on
+departure. Capture continues for banned senders; username lookups and bans do not
+change saved originals or memory authority.
+Unbanning deletes only the current group's row for the resolved numeric user ID;
+both commands share argument validation and lookup through one handler.
 
 AI factories accept ordinary arguments; tools declare injected dependencies
 with `FromDishka` and the AG2 integration's `@inject`. Model choices, timeouts,
@@ -127,9 +142,13 @@ intent rules alongside those shared fragments. User inputs and tool evidence use
 `external_input` envelopes with literal source text; native assistant records
 remain unwrapped. Source labels describe origin, never extra permissions.
 The reply-agent factory also attaches `ReplyTrace` middleware for correlated
-model/tool timings, outcomes and token counts. It reads trusted `MemoryAccess`
-through an AG2 `Inject` annotation and records raw model output before validation,
-its message count when readable, and the number of tool calls. Input conversation
+model/tool timings, outcomes and token counts, and an AG2 observer for builtin
+tool call/result events. The observer logs their names, call IDs, request IDs and
+provider status without code or result bodies; it infers no execution duration
+from events delivered with the provider response. The model's `tool_call_count`
+counts function tools only. Both read trusted `MemoryAccess` through an AG2
+`Inject` annotation. The middleware records raw model output before validation,
+its message count when readable, and the number of function tool calls. Input conversation
 bodies and tool results stay excluded; credential redaction also covers
 model output and explicitly logged history SQL. Other tool arguments stay excluded.
 History-call events include the SQL list and call ID. The SQL adapter logs
@@ -366,3 +385,11 @@ attempting pending preparation before accessing Telegram. With
 `HEALTHCHECK_PATH` configured, startup removes a stale marker, verifies Telegram
 identity and writes the current PID before polling. Shutdown removes the marker
 and closes the container. Readiness verifies startup, not embedding coverage.
+
+Group records also persist independent ordinary-reply and whisper audiences.
+`AccessMiddleware` applies the selected audience before addressing or generation,
+with group activation and the blacklist taking precedence. The same middleware
+authorizes settings callbacks using the actual presser and panel group;
+`bot/handlers/settings.py` owns panel rendering and typed callback routing.
+Audience changes update only their own column. Migration transfers both values
+from the old group when present; ordinary observations preserve the target values.

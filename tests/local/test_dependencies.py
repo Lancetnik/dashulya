@@ -72,6 +72,7 @@ class TestDependency:
             "search_memory",
             "chat_history",
             "set_reaction",
+            "code_execution",
         ]
         assert await (await reply.ask("Hello")).content() == ReplyBatch((Reply("Hello"),))
         assert await (await decision.ask("Addressed?")).content()

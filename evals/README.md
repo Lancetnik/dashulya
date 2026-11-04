@@ -6,6 +6,11 @@ AG2 Evals, with offline validation/export, production memory tools, trace checks
 and a provisional semantic judge. Its `run` command is explicitly separate from
 preparation and development checks.
 
+The [addressing suite](suites/addressing/README.md) exports frozen regex candidates
+without expert labels, collects Decisions probabilities for prompt variants,
+and computes ROC AUC and threshold metrics. Its local dataset includes original
+messages, reconstructed production context and expert addressing decisions.
+
 `datasets/` is entirely local and ignored, including dataset descriptions,
 manifests, preparation scripts, cases and annotations. `runs/` contains generated
 indices, exports and results and is also ignored. A fresh clone contains neither;

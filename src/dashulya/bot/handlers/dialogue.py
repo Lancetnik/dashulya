@@ -8,7 +8,7 @@ from dishka.integrations.aiogram import FromDishka, inject
 
 from dashulya.ai.addressing import GroupAddressing
 from dashulya.ai.dialogue import Dialogue
-from dashulya.bot.messages import conversation_key
+from dashulya.bot.messages import conversation_key, message_text
 from dashulya.bot.replies import ReplyDelivery
 from dashulya.domain.messages import GroupMessage
 from dashulya.observability import exception_fields
@@ -18,15 +18,7 @@ logger = logging.getLogger(__name__)
 
 def group_message(message: Message, *, include_reply: bool = True) -> GroupMessage:
     sender = message.from_user
-    text = (
-        message.text
-        or message.caption
-        or (
-            message.rich_message.model_dump_json(exclude_none=True)
-            if message.rich_message
-            else ""
-        )
-    )
+    text = message_text(message)
     return GroupMessage(
         message_id=message.message_id,
         text=text,
@@ -99,7 +91,7 @@ async def group_chat(
 @inject
 async def clear(message: Message, dialogue: FromDishka[Dialogue]) -> None:
     await dialogue.clear(conversation_key(message))
-    await message.answer("Conversation cleared. Let's start fresh 💋")
+    await message.answer("Диалог очищен. Начнём заново 💋")
 
 
 @inject
@@ -112,7 +104,7 @@ def create_router() -> Router:
     router.message.register(clear, Command("clear"), F.chat.type == ChatType.PRIVATE)
     router.message.register(
         chat,
-        F.text | F.photo | F.document | F.sticker | F.animation,
+        F.text | F.photo | F.document | F.sticker | F.animation | F.poll,
         ~F.text.startswith("/"),
         ~F.caption.startswith("/"),
         F.from_user,
@@ -122,7 +114,7 @@ def create_router() -> Router:
     router.message.register(
         group_chat,
         F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
-        F.text | F.photo | F.document | F.sticker | F.animation,
+        F.text | F.photo | F.document | F.sticker | F.animation | F.poll,
         ~F.text.startswith("/"),
         ~F.caption.startswith("/"),
         F.from_user,

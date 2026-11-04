@@ -3,6 +3,7 @@ from typing import Annotated
 
 from ag2 import Agent, Context, Inject
 from ag2.middleware import Middleware
+from ag2.tools import CodeExecutionTool
 from aiogram import Bot
 from dishka import AsyncContainer, Provider, provide
 from dishka_ag2 import AG2Scope, DishkaAsyncMiddleware
@@ -95,6 +96,7 @@ class AgentProvider(Provider):
                 search_memory,
                 chat_history,
                 set_reaction,
+                CodeExecutionTool(),
                 *create_web_tools(settings.keenable_api_key),
             ],
             middleware=[Middleware(DishkaAsyncMiddleware, container=container)],

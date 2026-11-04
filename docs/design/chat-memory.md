@@ -226,8 +226,14 @@ history/search records retain their structured representation.
 
 ## Incoming group messages
 
-Capture runs before owner authorization for every delivered group/supergroup
-message, including participants who cannot invoke the bot. Owner-private
+Capture runs before sender authorization, but only after the owner's first
+`/start` in that group/supergroup. Until then, skip incoming originals, edits,
+reply snapshots and outgoing messages, so they cannot create indexing work.
+The persisted capture permission is independent of active replies: subsequent
+`/stop` and `/start` do not disable it. Preserve it across metadata refresh,
+restart and supergroup migration, and reset it on departure. Upgrade grants it
+only to currently active groups; paused groups need one owner `/start`.
+After approval, capture includes participants who cannot invoke the bot. Owner-private
 messages are also captured; other private senders are excluded. Edited updates
 use the same recorder without invoking a reply. Service events are excluded.
 Text, captions and attachment types are stored, along with Telegram `file_id` and
@@ -237,6 +243,13 @@ available thumbnail IDs/sizes. Passive capture does not download or transcribe
 attachment contents. Incoming reply
 snapshots can fill missing parents without overwriting recorded originals or
 their deeper reply relationships.
+
+Poll messages retain a textual projection containing only their question and
+numbered answer options, preserving the original language and complete text.
+The same projection supplies current model input, addressing, reply context and
+saved history/search. Vote counts, voter identities, poll mode/status and quiz
+answers are not included. Owner-private replies to a poll also include that
+parent's question and options. Poll reading does not subscribe to vote updates.
 
 After sender authorization and a positive addressing decision, private replies
 load the current visual media and its direct reply parent's image into RAM.

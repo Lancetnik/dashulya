@@ -36,16 +36,18 @@ class TelegramProvider(Provider):
 
     @provide
     def capture(
-        self, recorder: MessageRecorder, settings: Settings
+        self, recorder: MessageRecorder, groups: GroupRegistry, settings: Settings
     ) -> CaptureMessagesMiddleware:
-        return CaptureMessagesMiddleware(recorder, owner_user_id=settings.owner_user_id)
+        return CaptureMessagesMiddleware(
+            recorder, groups, owner_user_id=settings.owner_user_id
+        )
 
     @provide
     def capture_sent(
-        self, recorder: MessageRecorder, settings: Settings
+        self, recorder: MessageRecorder, groups: GroupRegistry, settings: Settings
     ) -> CaptureSentMessagesMiddleware:
         return CaptureSentMessagesMiddleware(
-            recorder, owner_user_id=settings.owner_user_id
+            recorder, groups, owner_user_id=settings.owner_user_id
         )
 
     @provide

@@ -114,7 +114,7 @@ class TestGroupTracking:
 
     async def test_empty_list_and_private_chats_are_not_registered(self) -> None:
         await self.message("/groups")
-        assert "I don't know of any groups yet" in self.last_reply()
+        assert "Пока не знаю ни одной группы" in self.last_reply()
         assert self.last_reply().startswith("📭")
         assert await self.groups.list_groups() == []
 
@@ -132,8 +132,8 @@ class TestGroupTracking:
         text = self.last_reply()
         assert "🔴 Test group (ID: -123)" in text
         assert "🔴 Public group @public_group (ID: -100456)" in text
-        assert text.startswith("📋 Groups I know I'm in:")
-        assert text.count("— inactive (send /start there)") == 2
+        assert text.startswith("📋 Известные мне группы:")
+        assert text.count("— ответы выключены (отправь там /start)") == 2
         assert text.index("Public group") < text.index("Test group")
 
     async def test_existing_group_is_registered_before_answering_command(self) -> None:
@@ -143,7 +143,7 @@ class TestGroupTracking:
         await self.message("/start@dashulya_bot", chat=GROUP_CHAT)
         await self.message("/groups@dashulya_bot", chat=GROUP_CHAT)
         assert "🟢 Test group (ID: -123)" in self.last_reply()
-        assert "— active" in self.last_reply()
+        assert "— отвечаю" in self.last_reply()
         assert len(await self.groups.list_groups()) == 1
 
     async def test_messages_refresh_metadata_without_duplicate_groups(self) -> None:
@@ -165,7 +165,7 @@ class TestGroupTracking:
                 fields: dict[str, Any] = {"until_date": 0} if status == "kicked" else {}
                 await self.membership(status, **fields)
                 await self.message("/groups")
-                assert "I don't know of any groups yet" in self.last_reply()
+                assert "Пока не знаю ни одной группы" in self.last_reply()
                 await self.membership()
                 assert await self.groups.list_groups() == [Group(-123, "Test group")]
 
@@ -187,18 +187,18 @@ class TestGroupTracking:
         if not membership_first:
             await self.membership("kicked", chat=chat, until_date=0)
         await self.message("/groups")
-        assert "I don't know of any groups yet" in self.last_reply()
+        assert "Пока не знаю ни одной группы" in self.last_reply()
         await self.membership(chat=chat)
         await self.message("/groups")
         assert "🔴 Test group (ID: -123)" in self.last_reply()
-        assert "— inactive (send /start there)" in self.last_reply()
+        assert "— ответы выключены (отправь там /start)" in self.last_reply()
 
     @pytest.mark.parametrize(
         ("departed", "expected"),
         [
-            (BOT_USER, "I don't know of any groups yet"),
-            (USER, "🟢 Test group (ID: -123) — active"),
-            ({**BOT_USER, "id": 987654321}, "🟢 Test group (ID: -123) — active"),
+            (BOT_USER, "Пока не знаю ни одной группы"),
+            (USER, "🟢 Test group (ID: -123) — отвечаю"),
+            ({**BOT_USER, "id": 987654321}, "🟢 Test group (ID: -123) — отвечаю"),
         ],
     )
     async def test_departure_service_without_membership_update_removes_only_this_bot(
@@ -279,6 +279,7 @@ class TestGroupTracking:
 
     async def test_polling_subscribes_to_membership_updates(self) -> None:
         assert self.dispatcher.resolve_used_update_types() == [
+            "callback_query",
             "edited_message",
             "message",
             "my_chat_member",
@@ -294,6 +295,66 @@ class TestGroupPersistence:
         self.database = database
         self.database_url = database_url
         self.cleanup = cleanup
+
+    async def test_blacklist_survives_restart_and_metadata_refresh_only_in_its_group(
+        self,
+    ) -> None:
+        registry = GroupRegistry(GroupStore(self.database))
+        await registry.observe(Group(-123, "Test group"))
+        await registry.observe(Group(-456, "Other group"))
+        assert not await registry.is_banned(-123, 99)
+        await registry.ban(-123, 99)
+        await registry.ban(-123, 99)
+        reopened_database = Database(self.database_url)
+        self.cleanup.push_async_callback(reopened_database.close)
+        await reopened_database.open()
+        reopened = GroupRegistry(GroupStore(reopened_database))
+        await reopened.observe(Group(-123, "Renamed group", "renamed"))
+        assert await reopened.is_banned(-123, 99)
+        assert not await reopened.is_banned(-456, 99)
+        assert not await reopened.is_banned(-123, 100)
+
+    async def test_unban_persists_and_preserves_other_users_and_groups(self) -> None:
+        registry = GroupRegistry(GroupStore(self.database))
+        for chat_id in (-123, -456):
+            await registry.observe(Group(chat_id, "Test group"))
+            await registry.ban(chat_id, 99)
+        await registry.ban(-123, 100)
+        await registry.unban(-123, 99)
+        await registry.unban(-123, 99)
+        reopened_database = Database(self.database_url)
+        self.cleanup.push_async_callback(reopened_database.close)
+        await reopened_database.open()
+        reopened = GroupRegistry(GroupStore(reopened_database))
+        assert not await reopened.is_banned(-123, 99)
+        assert await reopened.is_banned(-456, 99)
+        assert await reopened.is_banned(-123, 100)
+
+    @pytest.mark.parametrize("incoming_first", [False, True])
+    async def test_blacklist_follows_migration_and_resets_after_departure(
+        self, incoming_first: bool
+    ) -> None:
+        registry = GroupRegistry(GroupStore(self.database))
+        await registry.observe(Group(-123, "Old group"))
+        await registry.ban(-123, 99)
+        await registry.ban(-123, 101)
+        await registry.observe(Group(-100456, "New group"))
+        await registry.ban(-100456, 99)
+        await registry.ban(-100456, 100)
+        if incoming_first:
+            await registry.observe(Group(-100456, "New group"), migrated_from=-123)
+            await registry.observe(Group(-123, "Old group"), migrated_to=-100456)
+        else:
+            await registry.observe(Group(-123, "Old group"), migrated_to=-100456)
+            await registry.observe(Group(-100456, "New group"), migrated_from=-123)
+        assert await registry.is_banned(-100456, 99)
+        assert await registry.is_banned(-100456, 100)
+        assert await registry.is_banned(-100456, 101)
+        assert not await registry.is_banned(-123, 99)
+        await registry.membership(Group(-100456, "New group"), present=False)
+        await registry.membership(Group(-100456, "New group"), present=True)
+        assert not await registry.is_banned(-100456, 99)
+        assert not await registry.is_banned(-100456, 100)
 
     async def test_activation_survives_restart_metadata_refresh_and_membership_update(
         self,
@@ -313,7 +374,7 @@ class TestGroupPersistence:
         await registry.membership(Group(-123, "Renamed group", "renamed"), present=True)
         assert await registry.is_active(-123)
         assert await reopened.list_groups() == [
-            Group(-123, "Renamed group", "renamed", active=True)
+            Group(-123, "Renamed group", "renamed", active=True, capture_enabled=True)
         ]
         await registry.membership(Group(-123, "Renamed group"), present=False)
         await registry.membership(Group(-123, "Renamed group"), present=True)

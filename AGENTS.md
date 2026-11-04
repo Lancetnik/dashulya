@@ -3,7 +3,7 @@
 Dashulya is a Telegram assistant for group conversations. Private access, group
 activation and other commands belong to one configured owner; chat administrators
 may also use `/stop` in their own group. Groups activated by the owner allow all
-human participants to address her. Use English for bot messages. Preserve imported
+human participants to address her. Use Russian for bot service messages. Preserve imported
 message text in its original language.
 
 ## Setup and checks

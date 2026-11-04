@@ -7,11 +7,13 @@ from collections.abc import Callable, Sequence
 from time import perf_counter
 from typing import Annotated, override
 
-from ag2 import Context, Inject
+from ag2 import Context, Inject, observer
 from ag2.events import (
     BaseEvent,
     BinaryInput,
     BinaryType,
+    BuiltinToolCallEvent,
+    BuiltinToolResultEvent,
     ModelRequest,
     ModelResponse,
     TextInput,
@@ -67,6 +69,26 @@ def _request_fields(
 
 # AG2 calls middleware hooks directly, outside its annotation resolver.
 _request: Callable[..., dict[str, object]] = inject(_request_fields, cast=False)
+
+
+@observer(BuiltinToolCallEvent | BuiltinToolResultEvent)
+async def log_builtin_tool(event: BaseEvent, context: Context) -> None:
+    fields = _request(__ctx__=context)
+    if isinstance(event, BuiltinToolCallEvent):
+        fields["tool_name"] = event.name
+        fields["tool_call_id"] = event.id
+        logger.info("AI builtin tool call observed", extra=fields)
+    elif isinstance(event, BuiltinToolResultEvent):
+        fields["tool_name"] = event.name
+        fields["tool_call_id"] = event.parent_id
+        status = event.result.metadata.get("status")
+        if isinstance(status, str):
+            fields["tool_status"] = status
+        logger.log(
+            logging.ERROR if status == "failed" else logging.INFO,
+            "AI builtin tool result observed",
+            extra=fields,
+        )
 
 
 def _outcome_fields(

@@ -25,7 +25,9 @@ async def track_membership(
         ChatMemberStatus.MEMBER,
     } or (member.status == ChatMemberStatus.RESTRICTED and member.is_member)
     await groups.membership(
-        Group(event.chat.id, event.chat.title or "Untitled group", event.chat.username),
+        Group(
+            event.chat.id, event.chat.title or "Группа без названия", event.chat.username
+        ),
         present=is_member,
     )
 

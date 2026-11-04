@@ -28,6 +28,7 @@ _CONTEXT_FIELDS = (
     "emoji",
     "tool_name",
     "tool_call_id",
+    "tool_status",
     "sql",
     "sql_truncated",
     "query_index",

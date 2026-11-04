@@ -13,6 +13,7 @@ from dishka_ag2 import AG2Scope
 
 from dashulya.ai.agents.models import AgentModels
 from dashulya.ai.dialogue import Dialogue
+from dashulya.domain.groups import Group, GroupRegistry, GroupRepository
 from dashulya.domain.memory import (
     ChatHistory,
     ChatMemoryService,
@@ -31,6 +32,15 @@ def reply_json(text: str, reply_to_message_id: int | None = None) -> str:
         if text.strip()
         else [],
     })
+
+
+def activated_group_registry() -> GroupRegistry:
+    """Stub the persistence boundary for capture in storage-independent delivery tests."""
+    repository = AsyncMock(spec=GroupRepository)
+    repository.get.side_effect = lambda chat_id: Group(
+        chat_id, "Group", active=True, capture_enabled=True
+    )
+    return GroupRegistry(repository)
 
 
 def dashulya_sticker_set() -> StickerSet:
