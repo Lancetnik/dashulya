@@ -2,7 +2,7 @@
 preview = true
 line-length = 90
 indent-width = 4
-target-version = "py312"
+target-version = "py314"
 include = ["src/**/*.py", "tests/**/*.py", "evals/suites/**/*.py", "pyproject.toml"]
 
 [format]

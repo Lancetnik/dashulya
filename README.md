@@ -486,7 +486,7 @@ messages alongside their selected reply context and AG2 events. The local
 database in read-only mode, without Telegram or model calls.
 
 GitHub Actions runs the development checks on pushes to `main` and pull requests.
-Tests and package builds run on Python 3.12, 3.13, and 3.14 without live Telegram
+The project requires Python 3.14. Tests and package builds run on 3.14 without live Telegram
 or model API calls. PostgreSQL integration tests use a disposable schema per test;
 the bootstrap check also creates and drops a separate database from `template0`
 to verify extension installation. The test administrator needs CREATE DATABASE
