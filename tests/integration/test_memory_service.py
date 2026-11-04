@@ -475,7 +475,7 @@ class TestMemoryService:
         self.embed.side_effect = embed
         caplog.clear()
         with (
-            patch("dashulya.memory._indexing.asyncio.sleep", side_effect=sleep),
+            patch("dashulya.memory._indexing._sleep", side_effect=sleep),
             caplog.at_level("WARNING", logger="dashulya.memory"),
         ):
             try:
