@@ -226,6 +226,12 @@ history/search records retain their structured representation.
 
 ## Incoming group messages
 
+Ephemeral messages and `/whisper` commands are excluded from canonical capture,
+including incoming reply snapshots and sent text/sticker responses. Their
+reusable ephemeral identifiers never become original-message identities.
+Whispers can read the current group's public context and scoped memory, but
+their questions and answers cannot enter later public context or retrieval.
+
 Capture runs before sender authorization, but only after the owner's first
 `/start` in that group/supergroup. Until then, skip incoming originals, edits,
 reply snapshots and outgoing messages, so they cannot create indexing work.

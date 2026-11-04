@@ -12,6 +12,11 @@ from dashulya.domain.groups import GroupRegistry
 async def register_group_commands(bot: Bot) -> None:
     await bot.set_my_commands(
         [
+            BotCommand(
+                command="whisper",
+                description="Задать Дашуле скрытый вопрос в группе",
+                is_ephemeral=True,
+            ),
             BotCommand(command="help", description="Показать справку"),
             BotCommand(
                 command="settings",
@@ -105,6 +110,7 @@ async def show_help(message: Message) -> None:
         "Вот что я умею 💋\n\n"
         "Справка и личный диалог\n"
         "/help — показать эту справку\n"
+        "/whisper <вопрос> — задать скрытый вопрос в активной группе; выбери команду из меню\n"
         "/clear — начать личный диалог заново\n\n"
         "Управление группами\n"
         "/settings — выбрать аудиторию обычных ответов и шёпота в текущей группе\n"

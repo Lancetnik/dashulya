@@ -27,7 +27,8 @@ from fast_depends import inject
 from pydantic import ValidationError
 
 from dashulya.domain.memory import MemoryAccess, MemoryInputError
-from dashulya.observability import exception_fields
+from dashulya.domain.messages import ReplyRequest
+from dashulya.observability import exception_fields, reply_log_fields
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,10 @@ def _memory_failure(event: ToolCallEvent, error: Exception) -> ToolErrorEvent:
 
 def _request_fields(
     access: Annotated[MemoryAccess | None, Inject("memory_access", default=None)],
+    request: Annotated[ReplyRequest | None, Inject("reply_request", default=None)],
 ) -> dict[str, object]:
+    if isinstance(request, ReplyRequest) and request.is_whisper:
+        return reply_log_fields(request)
     if isinstance(access, MemoryAccess):
         return {"chat_id": access.chat_id, "message_id": access.before_id}
     return {}

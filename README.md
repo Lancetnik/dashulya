@@ -84,6 +84,7 @@ records the storage decision.
 | Command | What happens |
 | --- | --- |
 | `/help` | See the available commands and how to use them |
+| `/whisper <question>` | Ask privately inside an active group; select the hidden command from the group menu |
 | `/clear` | Reset the current private conversation |
 | `/groups` | List the groups she knows about |
 | `/start` | Meet Dashulya; activate replies in the current group |
@@ -97,6 +98,29 @@ conversation, group management and participant restrictions.
 
 Private conversations and commands are available only to the configured owner,
 except group `/stop`, `/ban`, `/unban` and `/settings`, which are also available to that group's administrators.
+Group `/whisper` is available to human participants outside the blacklist in
+activated groups. At startup the bot registers it as an ephemeral command:
+the question and response are visible only to the sender and the bot. Use the
+group command menu in a Telegram client that supports ephemeral commands.
+Without administrator status the bot must reply within 15 seconds; it reserves
+time for a hidden explanation when generation takes too long. Administrator
+status allows longer answers. Telegram does not guarantee ephemeral delivery,
+especially while the user is offline, and these messages may disappear after
+restarting the client. See [Telegram's ephemeral message rules](https://core.telegram.org/bots/api#ephemeral-messages-and-commands).
+
+Each whisper uses fresh context from the current group/topic and can search
+only that group's saved memory, including when the owner asks. Hidden questions
+and responses are excluded from shared capture, indexing and future public reply
+context. Public typing and reactions are disabled. Whispers do not retain a
+private conversation between requests. If a client sends `/whisper` publicly,
+an administrator bot attempts to delete that command before answering privately;
+deletion cannot undo prior visibility. No failed private reply falls back to a
+public message.
+If a client sends the command publicly while the bot is not an administrator,
+the bot explains the required permissions without generating or quoting a private
+answer. Client support can differ between Telegram apps; a supporting mobile
+client may work while another client sends the same command publicly.
+
 Every group starts inactive. The owner enables replies with `/start` (or
 `/start@<bot_username>`) in that group. While inactive, the owner can use `/start`,
 `/stop`, `/ban`, `/unban` and `/settings`; chat administrators can use `/stop`, `/ban`, `/unban` and `/settings`. Sending `/start`

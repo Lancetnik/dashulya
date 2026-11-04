@@ -42,7 +42,7 @@ from dashulya.domain.messages import (
     ReplyBatch,
     ReplyRequest,
 )
-from dashulya.observability import exception_fields
+from dashulya.observability import exception_fields, reply_log_fields
 
 logger = logging.getLogger(__name__)
 
@@ -163,11 +163,36 @@ class Dialogue:
         await stream.history.replace(events)
         return stream, request.parts, context.messages
 
+    async def _whisper_input(
+        self, request: ReplyRequest, message: str
+    ) -> tuple[MemoryStream, list[Input]]:
+        if request.key[0] >= 0:
+            error_message = "Whispers require a group conversation."
+            raise ValueError(error_message)
+        stream = MemoryStream()
+        if self._history is not None:
+            context = await self._history.context(
+                request.key, None, limit=20, parent_hops=5, before=request.sent_at
+            )
+            await stream.history.replace(
+                self.context_events(context, interlocutor_id=request.user_id)
+            )
+        return stream, [
+            TextInput(
+                external_input(
+                    "Private whisper in the current group. Reply privately with text or a sticker; "
+                    "public reactions are unavailable.\n" + message,
+                    input_source(request.user_id, owner_id=self._formatter.owner_id),
+                )
+            )
+        ]
+
     def context_events(
         self,
         context: ReplyContext,
         *,
         images: tuple[ImageAttachment | ImageOmission, ...] = (),
+        interlocutor_id: int | None = None,
     ) -> list[ModelRequest | ModelResponse]:
         """Render selected originals with native media next to their source text."""
         if not context.messages:
@@ -183,7 +208,9 @@ class Dialogue:
             attachments.append(parts)
         formatted = self._formatter.events(
             messages,
-            interlocutor_id=current.author_id,
+            interlocutor_id=interlocutor_id
+            if interlocutor_id is not None
+            else current.author_id,
             truncated_threads=context.truncated_threads,
         )
         events = formatted[:1]
@@ -320,7 +347,9 @@ class Dialogue:
             stream = self._conversation(key).stream
             selected: tuple[MemoryMessage, ...] = ()
             allowed_reply_ids: set[int] = set()
-            if key[0] < 0:
+            if request.is_whisper:
+                stream, inputs = await self._whisper_input(request, message)
+            elif key[0] < 0:
                 if message_id is None:
                     error_message = "Group replies require a Telegram message ID."
                     raise ValueError(error_message)
@@ -364,8 +393,7 @@ class Dialogue:
                 logger.warning(
                     "AI conversation repaired",
                     extra={
-                        "chat_id": key[0],
-                        "message_id": message_id,
+                        **reply_log_fields(request),
                     },
                 )
             async with asyncio.timeout(300):
@@ -373,7 +401,7 @@ class Dialogue:
                     chat_id=key[0],
                     is_private=key[0] > 0,
                     before=request.sent_at,
-                    before_id=message_id,
+                    before_id=None if request.is_whisper else message_id,
                 )
                 reactions = ReactionTurn()
                 text_input = inputs[0]
@@ -384,8 +412,9 @@ class Dialogue:
                     stream=stream,
                     variables={"user_id": request.user_id, "chat_id": key[0]},
                     dependencies={
+                        "reply_request": request,
                         "memory_access": access,
-                        "reaction_turn": reactions,
+                        "reaction_turn": None if request.is_whisper else reactions,
                         "history_image_turn": await self._history_image_turn(
                             stream, inputs, message_id
                         ),
@@ -397,8 +426,7 @@ class Dialogue:
                     logger.warning(
                         "AI reply validation failed",
                         extra={
-                            "chat_id": key[0],
-                            "message_id": message_id,
+                            **reply_log_fields(request),
                             "validation_errors": [
                                 {"type": item["type"], "loc": item["loc"]}
                                 for item in error.errors(
@@ -483,8 +511,7 @@ def _validate_replies(
             logger.info(
                 "Group reply target selected",
                 extra={
-                    "chat_id": request.key[0],
-                    "message_id": request.message_id,
+                    **reply_log_fields(request),
                     "requested_reply_to_message_id": item.reply_to_message_id,
                     "reply_to_message_id": target
                     if target is not None or index > 0

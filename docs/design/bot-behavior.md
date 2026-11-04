@@ -112,6 +112,55 @@ edits and worker recovery follow the
 
 ## Conversation context and delivery
 
+### Private whispers inside groups
+
+Whispers use the ordinary `AI request started`, `AI reply generated`,
+`AI reply delivered` and failure events, with confirmed chunk counts and timings.
+Their lifecycle and model/tool traces share the Telegram update ID, sender,
+chat/topic, ephemeral message ID and `is_whisper=True`. Ephemeral IDs remain
+separate from canonical original-message IDs and memory cutoffs. Raw model
+outputs and history SQL follow the ordinary operational logging policy;
+exclusion from shared memory does not suppress those logs. Skipped requests
+record their reason, including expired reply windows and missing permissions.
+
+At startup, register `/whisper` with `BotCommand.is_ephemeral=True` in the
+all-group command scope. Human participants outside the group's blacklist may
+use it while the group is active and its whisper audience allows them; it does not grant private-chat or owner-command
+access. Route every ephemeral group update, including unsupported commands,
+through hidden delivery before ordinary handlers. Unsupported commands and empty
+questions receive private usage guidance without performing administrative work.
+
+Each whisper starts an independent stream seeded with up to 20 public originals
+and their bounded reply ancestors from the same group/topic, strictly before
+the request's send time. Exclude originals edited at or after that cutoff.
+Whispers have no canonical public message ID: Telegram uses `message_id=0` and
+a separate reusable `ephemeral_message_id`. Memory tools retain the original
+group scope and send-time cutoff, including for the owner; hidden delivery does
+not acquire the owner's federated private-memory access. Questions and responses,
+including reply snapshots of public `/whisper` commands, never enter shared
+capture, indexing or public context. No private history is retained between turns.
+Do not send a public typing indicator or allow the reaction tool during a whisper.
+
+Deliver text chunks and stickers with `EphemeralMessageParameters.receiver_user_id`
+bound to the actual sender, ignoring model-selected public reply targets. Check
+the bot's own membership for each request. An administrator sends independently
+of the incoming hidden message so longer generation remains deliverable. Other
+bots reply using `ReplyParameters.ephemeral_message_id` within Telegram's
+15-second window, reserving time for hidden timeout guidance. Already expired
+requests remain silent; cancellation stops generation and delivery. Delivery
+errors never trigger public fallback or automatic retries. Ephemeral delivery is
+not guaranteed, particularly for offline users, and messages can disappear when
+the Telegram client restarts.
+
+If a client sends `/whisper` as a public command, an administrator bot attempts
+to delete it and answers privately; deletion is best effort and cannot undo
+prior exposure. Without administrator status and an incoming ephemeral ID, there
+is no eligible hidden reply. Send only public setup guidance, without generating
+or quoting a private answer. Select the registered hidden
+command in a supporting Telegram client for an initially private question.
+
+### Ordinary replies
+
 Reuse one AG2 `Agent`. Follow
 [ADR 0002](../adr/0002-rebuild-group-reply-context.md) for group context selection,
 roles, incremental author/date declarations, media and ordered reply targets.

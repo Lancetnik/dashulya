@@ -208,24 +208,31 @@ class MessageStore:
     async def context(
         self,
         key: ConversationKey,
-        through_message_id: int,
+        through_message_id: int | None,
         *,
         limit: int,
         parent_hops: int,
+        before: datetime | None = None,
     ) -> ReplyContext:
         """None selects the whole chat, including legacy ordinary reply threads."""
         async with self.database.connection() as connection:
             cursor = await connection.execute(
-                """WITH RECURSIVE recent AS (
-                    SELECT message_id FROM messages WHERE chat_id=%(chat)s
+                """WITH RECURSIVE visible AS NOT MATERIALIZED (
+                    SELECT * FROM messages WHERE chat_id=%(chat)s
+                        AND (%(before)s::timestamptz IS NULL OR (
+                            sent_at<%(before)s AND (edited_at IS NULL OR edited_at<%(before)s)
+                        ))
+                ), recent AS (
+                    SELECT message_id FROM visible WHERE chat_id=%(chat)s
                         AND (%(topic)s::bigint IS NULL OR topic_id=%(topic)s)
-                        AND message_id<=%(through)s AND sent_at IS NOT NULL
+                        AND (%(through)s::bigint IS NULL OR message_id<=%(through)s)
+                        AND sent_at IS NOT NULL
                         ORDER BY message_id DESC LIMIT %(limit)s
                 ), ancestors(message_id,depth) AS (
                     SELECT message_id,0 FROM recent UNION
                     SELECT parent.message_id,a.depth+1 FROM ancestors a
-                    JOIN messages child ON child.chat_id=%(chat)s AND child.message_id=a.message_id
-                    JOIN messages parent ON parent.collection=child.collection
+                    JOIN visible child ON child.chat_id=%(chat)s AND child.message_id=a.message_id
+                    JOIN visible parent ON parent.collection=child.collection
                         AND parent.message_id=child.reply_to_id
                     WHERE a.depth<%(hops)s
                         AND (%(topic)s::bigint IS NULL OR parent.topic_id=%(topic)s)
@@ -233,7 +240,7 @@ class MessageStore:
                 ), selected AS MATERIALIZED (
                     SELECT message_id,min(depth) AS depth FROM ancestors GROUP BY message_id
                 ), boundaries AS (
-                    SELECT m.collection,m.message_id,m.reply_to_id FROM messages m
+                    SELECT m.collection,m.message_id,m.reply_to_id FROM visible m
                     JOIN selected s USING(message_id) WHERE m.chat_id=%(chat)s
                         AND s.depth=%(hops)s AND m.reply_to_id<m.message_id
                         AND NOT EXISTS(SELECT 1 FROM selected p WHERE p.message_id=m.reply_to_id)
@@ -241,7 +248,7 @@ class MessageStore:
                     SELECT message_id,collection,message_id,reply_to_id,0 FROM boundaries
                     UNION ALL
                     SELECT l.boundary_id,p.collection,p.message_id,p.reply_to_id,l.hops+1
-                    FROM lineage l JOIN messages p
+                    FROM lineage l JOIN visible p
                         ON p.collection=l.collection AND p.message_id=l.reply_to_id
                     WHERE p.message_id<l.message_id AND p.sent_at IS NOT NULL
                         AND (%(topic)s::bigint IS NULL OR p.topic_id=%(topic)s)
@@ -250,7 +257,7 @@ class MessageStore:
                         min(hops) FILTER(WHERE reply_to_id IS NULL) AS remaining_hops
                     FROM lineage GROUP BY boundary_id
                 ) SELECT m.*,r.boundary_id IS NOT NULL AS truncated,r.root_id,r.remaining_hops
-                FROM messages m JOIN selected s USING(message_id)
+                FROM visible m JOIN selected s USING(message_id)
                 LEFT JOIN roots r ON r.boundary_id=m.message_id
                 WHERE m.chat_id=%(chat)s ORDER BY m.message_id""",
                 {
@@ -259,6 +266,7 @@ class MessageStore:
                     "through": through_message_id,
                     "limit": limit,
                     "hops": parent_hops,
+                    "before": before,
                 },
             )
             rows = await cursor.fetchall()

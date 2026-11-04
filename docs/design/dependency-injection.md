@@ -147,7 +147,10 @@ tool call/result events. The observer logs their names, call IDs, request IDs an
 provider status without code or result bodies; it infers no execution duration
 from events delivered with the provider response. The model's `tool_call_count`
 counts function tools only. Both read trusted `MemoryAccess` through an AG2
-`Inject` annotation. The middleware records raw model output before validation,
+`Inject` annotation. `Dialogue` also supplies the typed `ReplyRequest` for logging
+correlation. Whisper traces use its update ID, sender, topic and separate
+ephemeral ID without changing memory authority or the original send-time cutoff.
+The middleware records raw model output before validation,
 its message count when readable, and the number of function tool calls. Input conversation
 bodies and tool results stay excluded; credential redaction also covers
 model output and explicitly logged history SQL. Other tool arguments stay excluded.

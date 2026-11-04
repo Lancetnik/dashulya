@@ -11,7 +11,7 @@ from aiogram.methods import SendMessage, SendRichMessage, SendSticker, TelegramM
 from aiogram.methods.base import Response, TelegramType
 from aiogram.types import Message, TelegramObject, Update
 
-from dashulya.bot.messages import capture_message
+from dashulya.bot.messages import capture_message, is_whisper
 from dashulya.bot.presentation import rich_html_text
 from dashulya.domain.groups import GroupRegistry
 from dashulya.domain.memory import MessageRecorder
@@ -30,6 +30,8 @@ class CaptureMessagesMiddleware(BaseMiddleware):
         self._owner_user_id = owner_user_id
 
     async def capture(self, message: Message, event_update: Update | None = None) -> None:
+        if is_whisper(message):
+            return
         private = message.chat.type == ChatType.PRIVATE
         if message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}:
             group = await self._groups.get(message.chat.id)
@@ -85,6 +87,11 @@ class CaptureSentMessagesMiddleware(BaseRequestMiddleware):
         method: TelegramMethod[TelegramType],
     ) -> Response[TelegramType]:
         response = await make_request(bot, method)
+        if (
+            isinstance(method, (SendMessage, SendRichMessage, SendSticker))
+            and method.ephemeral_message_parameters is not None
+        ):
+            return response
         if isinstance(response, Message) and isinstance(
             method, (SendMessage, SendRichMessage, SendSticker)
         ):

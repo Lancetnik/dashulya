@@ -11,10 +11,16 @@ from pathlib import Path
 from typing import Any
 
 from dashulya.domain.memory import MemoryInputError
+from dashulya.domain.messages import ReplyRequest
 
 _CONTEXT_FIELDS = (
     "chat_id",
     "message_id",
+    "user_id",
+    "topic_id",
+    "update_id",
+    "ephemeral_message_id",
+    "is_whisper",
     "duration_ms",
     "search_metrics",
     "retry_after",
@@ -69,6 +75,19 @@ _CONTEXT_FIELDS = (
     "context_message_ids",
     "exceptions",
 )
+
+
+def reply_log_fields(request: ReplyRequest) -> dict[str, object]:
+    """Correlate a turn without treating ephemeral identifiers as saved originals."""
+    return {
+        "chat_id": request.key[0],
+        "topic_id": request.key[1],
+        "message_id": request.message_id,
+        "user_id": request.user_id,
+        "update_id": request.update_id,
+        "ephemeral_message_id": request.ephemeral_message_id,
+        "is_whisper": request.is_whisper,
+    }
 
 
 def _exception_trace(

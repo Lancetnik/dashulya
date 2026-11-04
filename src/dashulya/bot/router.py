@@ -1,6 +1,6 @@
 from aiogram import Router
 
-from dashulya.bot.handlers import commands, dialogue, groups, settings
+from dashulya.bot.handlers import commands, dialogue, groups, settings, whisper
 from dashulya.bot.middlewares.access import AccessMiddleware
 from dashulya.bot.middlewares.group_tracking import TrackGroupsMiddleware
 from dashulya.bot.middlewares.memory import CaptureMessagesMiddleware
@@ -19,6 +19,7 @@ def create_router(
     router.callback_query.outer_middleware(access)
     router.edited_message.register(capture.capture)
     router.include_routers(
+        whisper.create_router(),
         settings.create_router(),
         commands.create_router(),
         groups.create_router(),

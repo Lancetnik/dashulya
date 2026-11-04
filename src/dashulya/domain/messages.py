@@ -43,6 +43,9 @@ class ReplyRequest:
     Negative chat IDs select fresh group context; positive IDs retain private
     history. Group requests require message_id. Reply parents refer to originals
     in that conversation, never to an independent snapshot supplied by a caller.
+    Whispers use a fresh stream with group-scoped memory and a send-time cutoff;
+    their reusable Telegram identifiers are not original message IDs.
+    The update and ephemeral identifiers correlate operational logs only.
     """
 
     key: ConversationKey
@@ -53,6 +56,9 @@ class ReplyRequest:
     message_id: int | None = None
     reply_to_id: int | None = None
     images: tuple[ImageAttachment | ImageOmission, ...] = ()
+    is_whisper: bool = False
+    ephemeral_message_id: int | None = None
+    update_id: int | None = None
 
 
 @dataclass(frozen=True)

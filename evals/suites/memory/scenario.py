@@ -121,14 +121,15 @@ class ObservedStore(MessageStore):
     async def context(
         self,
         key: ConversationKey,
-        through_message_id: int,
+        through_message_id: int | None,
         *,
         limit: int,
         parent_hops: int,
+        before: datetime | None = None,
     ) -> ReplyContext:
         started = perf_counter()
         result = await super().context(
-            key, through_message_id, limit=limit, parent_hops=parent_hops
+            key, through_message_id, limit=limit, parent_hops=parent_hops, before=before
         )
         if (diagnostics := active_diagnostics.get()) is not None:
             diagnostics.context_ms += round((perf_counter() - started) * 1000)

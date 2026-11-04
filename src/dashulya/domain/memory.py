@@ -144,10 +144,11 @@ class ChatHistory(Protocol):
     async def context(
         self,
         key: ConversationKey,
-        through_message_id: int,
+        through_message_id: int | None,
         *,
         limit: int,
         parent_hops: int,
+        before: datetime | None = None,
     ) -> ReplyContext: ...
 
 

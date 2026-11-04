@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Literal
@@ -7,6 +8,18 @@ from aiogram.types import Animation, Document, Message, Sticker
 
 from dashulya.domain.memory import MemoryMessage, MessageRecorder
 from dashulya.domain.messages import ConversationKey, ImageFile
+
+
+def is_whisper(message: Message) -> bool:
+    """Keep hidden messages and public whisper snapshots out of shared capture."""
+    return (
+        message.ephemeral_message_id is not None
+        or message.receiver_user is not None
+        or re.match(
+            r"^/whisper(?:@[A-Za-z0-9_]+)?(?:\s|$)", message.text or message.caption or ""
+        )
+        is not None
+    )
 
 
 def message_text(message: Message) -> str:
@@ -95,6 +108,9 @@ async def capture_message(
     reply_to_id: int | None = None,
     allow_private: bool = False,
 ) -> None:
+    # Ephemeral originals have reusable IDs and must never enter shared history.
+    if is_whisper(message):
+        return
     if message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP} and not (
         allow_private and message.chat.type == ChatType.PRIVATE
     ):
