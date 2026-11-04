@@ -66,7 +66,7 @@ def matches_count_sql(query: str, aggregation: dict[str, Any]) -> bool:
     )
     try:
         return _same_predicate(query, expected_sql)
-    except (ParseError, TypeError, ValueError, RecursionError):
+    except ParseError, TypeError, ValueError, RecursionError:
         return False
 
 

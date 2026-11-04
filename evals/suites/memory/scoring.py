@@ -77,7 +77,7 @@ def tool_results(trace: Trace) -> Iterator[tuple[ToolResultEvent, dict[str, Any]
                     content = content[len(opening) : -len(closing)]
                 try:
                     value = json.loads(content)
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     continue
                 if isinstance(value, dict):
                     yield event, history_rows(value)
@@ -126,7 +126,7 @@ def answer_text(outputs: dict[str, Any]) -> str:
     if not isinstance(value, dict):
         try:
             value = json.loads(outputs.get("body") or "{}")
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return ""
     if not isinstance(value, dict):
         return ""

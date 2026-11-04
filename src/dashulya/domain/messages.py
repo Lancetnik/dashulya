@@ -102,7 +102,7 @@ class GroupMessage:
     sender_is_bot: bool = False
     mentioned_usernames: tuple[str, ...] = ()
     mentioned_user_ids: tuple[int, ...] = ()
-    reply_to: "GroupMessage | None" = None
+    reply_to: GroupMessage | None = None
 
     def context(self) -> dict[str, object]:
         return {

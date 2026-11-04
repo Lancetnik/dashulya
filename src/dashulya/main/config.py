@@ -76,7 +76,7 @@ def load_settings() -> Settings:
     bot_timezone = os.getenv("BOT_TIMEZONE", "").strip() or "Europe/Moscow"
     try:
         ZoneInfo(bot_timezone)
-    except (ZoneInfoNotFoundError, ValueError):
+    except ZoneInfoNotFoundError, ValueError:
         error_message = (
             "BOT_TIMEZONE must be a valid IANA timezone, such as Europe/Moscow."
         )

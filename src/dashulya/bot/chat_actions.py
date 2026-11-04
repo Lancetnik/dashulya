@@ -36,7 +36,7 @@ async def _send_typing(bot: Bot, message: Message) -> None:
 
 
 @asynccontextmanager
-async def typing(bot: Bot, message: Message) -> AsyncGenerator[None, None]:
+async def typing(bot: Bot, message: Message) -> AsyncGenerator[None]:
     task = asyncio.create_task(_send_typing(bot, message))
     try:
         yield

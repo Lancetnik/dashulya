@@ -28,6 +28,10 @@ ignore = [
     "COM812",
     "ISC001",
     "TRY301",
+    # Keep annotation imports available to runtime framework introspection.
+    "TC001",
+    "TC002",
+    "TC003",
     "S101",
     "SLF001",
     "PLR0911",

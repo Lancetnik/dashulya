@@ -224,7 +224,7 @@ def score(
             lower = datetime.fromisoformat(arguments["after"])
             upper = datetime.fromisoformat(arguments["before"])
             bounded = lower >= case.after and upper <= case.before and lower <= upper
-        except (KeyError, TypeError, ValueError):
+        except KeyError, TypeError, ValueError:
             bounded = False
         if not bounded or (
             case.author_id is not None and arguments.get("author_id") != case.author_id

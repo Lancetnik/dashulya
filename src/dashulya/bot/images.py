@@ -51,7 +51,7 @@ def _media_type(data: bytes) -> ImageMediaType:
     raise ImageInputError(error_message)
 
 
-async def _decode(data: bytes, budget: "_ImageBudget") -> bytes:
+async def _decode(data: bytes, budget: _ImageBudget) -> bytes:
     budget.stage = "decode"
     started = perf_counter()
     logger.info(
@@ -134,7 +134,7 @@ class _BatchBudget:
             self.available -= size
 
     async def release(
-        self, item: "_ImageBudget", result: ImageAttachment | ImageOmission
+        self, item: _ImageBudget, result: ImageAttachment | ImageOmission
     ) -> None:
         async with self._changed:
             assert item.capacity is not None
@@ -264,9 +264,9 @@ class TelegramImages:
         reason: Literal["too_large", "decode_failed"] = "decode_failed"
         try:
             frame = await _decode(await self._read(file, budget=budget), budget)
-        except (ImageTooLargeError, FrameBudgetError):
+        except ImageTooLargeError, FrameBudgetError:
             reason = "too_large"
-        except (ImageInputError, FrameDecodeError):
+        except ImageInputError, FrameDecodeError:
             pass
         else:
             return ImageAttachment(

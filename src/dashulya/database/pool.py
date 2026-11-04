@@ -39,7 +39,7 @@ class Database:
                 raise
 
     @asynccontextmanager
-    async def connection(self) -> AsyncGenerator[AsyncConnection[dict[str, Any]], None]:
+    async def connection(self) -> AsyncGenerator[AsyncConnection[dict[str, Any]]]:
         if not self._ready:
             await self.open()
         async with self.pool.connection() as connection:

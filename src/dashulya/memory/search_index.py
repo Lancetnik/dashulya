@@ -186,7 +186,7 @@ class SearchIndex:
         await connection.execute(sql.SQL("ANALYZE {}").format(table))
 
     @asynccontextmanager
-    async def lease(self) -> AsyncGenerator[None, None]:
+    async def lease(self) -> AsyncGenerator[None]:
         if self._closed:
             message = "Memory retrieval is closed."
             raise RuntimeError(message)

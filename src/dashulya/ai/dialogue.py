@@ -80,7 +80,7 @@ class Dialogue:
         return self._conversations[key]
 
     @asynccontextmanager
-    async def delivery(self, key: ConversationKey) -> AsyncGenerator[None, None]:
+    async def delivery(self, key: ConversationKey) -> AsyncGenerator[None]:
         # Keep each Telegram reply batch together through persistence.
         async with self._conversation(key).delivery_lock:
             yield

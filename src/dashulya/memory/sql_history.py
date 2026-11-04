@@ -242,7 +242,7 @@ def validate_query(query: str) -> str:
         raise MemoryInputError(msg)
     try:
         parsed = parse_sql(query)
-    except (ParseError, RecursionError, ValueError):
+    except ParseError, RecursionError, ValueError:
         msg = "Invalid PostgreSQL query syntax."
         raise MemoryInputError(msg) from None
     statement = parsed[0].stmt if len(parsed) == 1 else None

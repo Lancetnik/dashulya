@@ -98,7 +98,7 @@ def database_url() -> str:
 
 
 @asynccontextmanager
-async def isolated_database(url: str) -> AsyncGenerator[Database, None]:
+async def isolated_database(url: str) -> AsyncGenerator[Database]:
     schema = "eval_memory_" + uuid4().hex
     async with await AsyncConnection.connect(url, autocommit=True) as connection:
         # Refuse application data even when DATABASE_URL is absent or spelled differently.
@@ -163,7 +163,7 @@ async def memory_agent(
     *,
     api_key: str,
     url: str,
-) -> AsyncGenerator[Agent[ReplyBatch], None]:
+) -> AsyncGenerator[Agent[ReplyBatch]]:
     """Index only one prefix; neither gold evidence nor future rows are ingested."""
     async with (
         isolated_database(url) as database,

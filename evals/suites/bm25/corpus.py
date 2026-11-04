@@ -38,7 +38,7 @@ class Case:
     requirements: tuple[tuple[tuple[str, ...], ...], ...] = ()
 
     @classmethod
-    def load(cls, row: dict[str, Any]) -> "Case":
+    def load(cls, row: dict[str, Any]) -> Case:
         return cls(
             case_id=row["case_id"],
             query=row["query"],

@@ -94,7 +94,7 @@ def _cursor_decode(value: str, fingerprint: str) -> tuple[str, str, int]:
             or type(position[2]) is not int
         ):
             raise ValueError
-    except (ValueError, KeyError, TypeError, IndexError):
+    except ValueError, KeyError, TypeError, IndexError:
         error_message = "History cursor is invalid for this access scope and query."
         raise MemoryInputError(error_message) from None
     return position[0], position[1], position[2]

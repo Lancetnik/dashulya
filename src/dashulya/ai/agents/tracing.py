@@ -124,7 +124,7 @@ def _history_sql_fields(event: ToolCallEvent) -> dict[str, object]:
         return {}
     try:
         query = event.serialized_arguments.get("sql")
-    except (AttributeError, ValueError, TypeError):
+    except AttributeError, ValueError, TypeError:
         return {}
     if isinstance(query, list) and all(isinstance(item, str) for item in query):
         return {
