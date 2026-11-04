@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:0.12.1-python3.13-trixie-slim AS builder
+FROM ghcr.io/astral-sh/uv:0.12.1-python3.14-trixie-slim AS builder
 
 WORKDIR /app
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -11,7 +11,7 @@ COPY src/ src/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
-FROM python:3.13-slim-trixie
+FROM python:3.14-slim-trixie
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \

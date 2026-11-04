@@ -5,7 +5,7 @@ description = "A Telegram assistant for group chats"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.12,<3.15"
+requires-python = ">=3.14,<3.15"
 
 dependencies = [
     "ag2[openai,mcp]>=1.2.1,<2",
@@ -80,7 +80,7 @@ pytest_add_cli_args_test_selection = ["tests/"]
 [tool.mypy]
 files = ["src/dashulya", "tests", "evals/suites"]
 strict = true
-python_version = "3.12"
+python_version = "3.14"
 strict_bytes = true
 local_partial_types = true
 show_error_codes = true
