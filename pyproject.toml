@@ -37,9 +37,9 @@ lint = [
     "mypy==2.4.1",
     "pre-commit==4.7.0",
     "pre-commit-hooks==6.0.0",
-    "ruff==0.17.3",
+    "ruff==0.17.4",
     "types-cachetools>=6,<8",
-    "typos==1.51.1",
+    "typos==1.52.0",
 ]
 dev = [
     {include-group = "lint"},
